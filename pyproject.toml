@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "synctone"
+version = "1.0.0"
+description = "Open-source audio synchronization assistant tool for OBS Studio"
+authors = [{ name = "SyncTone Team" }]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26.0",
+    "scipy>=1.12.0",
+    "sounddevice>=0.4.6",
+    "obsws-python>=1.7.0",
+    "PySide6>=6.6.0",
+    "pyqtgraph>=0.13.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pyinstaller>=6.0.0",
+]
+
+[project.scripts]
+synctone = "synctone.gui.main_window:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
