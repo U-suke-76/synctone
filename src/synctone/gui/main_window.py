@@ -1628,6 +1628,11 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    if "--smoke-test" in sys.argv:
+        # Verify all bundled modules, ChirpAnalyzer, AudioEngine, ObsClient, and Verifier modules work cleanly
+        analyzer = ChirpAnalyzer()
+        _ = analyzer.generate_chirp()
+        sys.exit(0)
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()

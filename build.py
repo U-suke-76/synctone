@@ -50,6 +50,14 @@ def build():
             size_mb = exe_path.stat().st_size / (1024 * 1024)
             print(f"\n[SUCCESS] Build completed successfully!")
             print(f"Output: {exe_path} ({size_mb:.1f} MB)\n")
+
+            # Verify that the built SyncTone.exe actually starts, imports all modules, and exits cleanly
+            print("Verifying built SyncTone.exe (--smoke-test)...")
+            smoke_res = subprocess.run([str(exe_path), "--smoke-test"], cwd=root_dir)
+            if smoke_res.returncode != 0:
+                print(f"[ERROR] SyncTone.exe verification failed with exit code {smoke_res.returncode}")
+                sys.exit(smoke_res.returncode)
+            print("[SUCCESS] SyncTone.exe startup verification passed!\n")
         else:
             print("\n[SUCCESS] Build finished successfully.\n")
     else:

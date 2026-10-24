@@ -35,22 +35,8 @@ excludes = [
     'PySide6.QtHelp',
     'PySide6.QtPrintSupport',
 
-    # SciPy unused subpackages (SyncTone only uses scipy.signal)
-    'scipy.optimize',
-    'scipy.sparse',
-    'scipy.spatial',
-    'scipy.stats',
-    'scipy.integrate',
-    'scipy.interpolate',
-    'scipy.ndimage',
-    'scipy.cluster',
-    'scipy.io',
-    'scipy.odr',
-
-    # Python standard libraries unused in SyncTone
-    # Note: Do NOT exclude standard library modules like 'email', 'unittest', 'pydoc', 'http', or 'xmlrpc'
-    # because PyInstaller's pyi_rth_pkgres / pkg_resources / importlib.metadata and numpy/scipy
-    # import them during startup on Python 3.11.
+    # Note: Do NOT exclude scipy subpackages (such as scipy.spatial, scipy.interpolate, scipy.ndimage, etc.)
+    # because newer scipy.signal internally imports them across subpackages.
     'tkinter',
 ]
 
