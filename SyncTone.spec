@@ -48,12 +48,10 @@ excludes = [
     'scipy.odr',
 
     # Python standard libraries unused in SyncTone
+    # Note: Do NOT exclude standard library modules like 'email', 'unittest', 'pydoc', 'http', or 'xmlrpc'
+    # because PyInstaller's pyi_rth_pkgres / pkg_resources / importlib.metadata and numpy/scipy
+    # import them during startup on Python 3.11.
     'tkinter',
-    'unittest',
-    'pydoc',
-    'email',
-    'http.server',
-    'xmlrpc',
 ]
 
 a = Analysis(

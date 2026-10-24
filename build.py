@@ -50,6 +50,16 @@ def build():
             size_mb = exe_path.stat().st_size / (1024 * 1024)
             print(f"\n[SUCCESS] Build completed successfully!")
             print(f"Output: {exe_path} ({size_mb:.1f} MB)\n")
+
+            # Run a quick offscreen smoke test to verify all bundled modules import and GUI initializes cleanly
+            print("Running smoke test on SyncTone.exe...")
+            smoke_env = os.environ.copy()
+            smoke_env["QT_QPA_PLATFORM"] = "offscreen"
+            smoke_res = subprocess.run([str(exe_path), "--smoke-test"], cwd=root_dir, env=smoke_env)
+            if smoke_res.returncode != 0:
+                print(f"[ERROR] SyncTone.exe smoke test failed with exit code {smoke_res.returncode}")
+                sys.exit(smoke_res.returncode)
+            print("[SUCCESS] SyncTone.exe smoke test passed!\n")
         else:
             print("\n[SUCCESS] Build finished successfully.\n")
     else:

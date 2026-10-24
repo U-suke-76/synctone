@@ -1631,6 +1631,8 @@ def main():
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
+    if "--smoke-test" in sys.argv:
+        QTimer.singleShot(250, window.close)
     sys.exit(app.exec())
 
 
