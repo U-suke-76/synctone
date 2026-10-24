@@ -2,6 +2,7 @@
 
 import sys
 import os
+import atexit
 from typing import List, Optional
 import numpy as np
 
@@ -16,6 +17,8 @@ from PySide6.QtGui import QFont
 
 def _qt_message_handler(mode: QtMsgType, context, message: str) -> None:
     """Filter out benign internal Qt font size warnings."""
+    if sys is None or sys.stderr is None:
+        return
     if "setPointSize: Point size <= 0" in message:
         return
     if "QFont::setPixelSize" in message:
@@ -23,6 +26,7 @@ def _qt_message_handler(mode: QtMsgType, context, message: str) -> None:
     sys.stderr.write(f"{message}\n")
 
 qInstallMessageHandler(_qt_message_handler)
+atexit.register(lambda: qInstallMessageHandler(None))
 
 from synctone.core.chirp import (
     ChirpAnalyzer, DelayEstimateResult, MultiMeasureResult, aggregate_measurements
@@ -1608,9 +1612,15 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
 
     def closeEvent(self, event):
+        if self.test_worker is not None and self.test_worker.isRunning():
+            self.test_worker.wait(1000)
+        if self.worker is not None and self.worker.isRunning():
+            self.worker.wait(1000)
         if self.verifier_window is not None:
             try:
                 self.verifier_window.close()
+                self.verifier_window.deleteLater()
+                self.verifier_window = None
             except Exception:
                 pass
         self._save_settings()

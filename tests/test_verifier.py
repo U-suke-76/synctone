@@ -14,10 +14,14 @@ os.environ["SYNCTONE_TEST_DUMMY_AUDIO"] = "1"
 
 @pytest.fixture(scope="session")
 def qapp():
+    from PySide6.QtCore import qInstallMessageHandler
     app = QApplication.instance()
     if app is None:
         app = QApplication([])
-    return app
+    yield app
+    app.closeAllWindows()
+    app.processEvents()
+    qInstallMessageHandler(None)
 
 
 @pytest.fixture(autouse=True)
@@ -119,6 +123,8 @@ def test_sync_canvas_render(qapp):
     player.stop()
     canvas.stop_timer()
     canvas.close()
+    canvas.deleteLater()
+    qapp.processEvents()
 
 
 def test_sync_verifier_window_interactions(qapp):
@@ -188,6 +194,8 @@ def test_sync_verifier_window_interactions(qapp):
     assert "AV Sync" in window.windowTitle()
 
     window.close()
+    window.deleteLater()
+    qapp.processEvents()
     assert not window.player.is_running
 
 
@@ -216,3 +224,5 @@ def test_main_window_verifier_integration(qapp):
     assert main_win.slider_offset.value() == 880
 
     main_win.close()
+    main_win.deleteLater()
+    qapp.processEvents()

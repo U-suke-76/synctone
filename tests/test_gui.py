@@ -10,10 +10,14 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 @pytest.fixture(scope="session")
 def qapp():
+    from PySide6.QtCore import qInstallMessageHandler
     app = QApplication.instance()
     if app is None:
         app = QApplication([])
-    return app
+    yield app
+    app.closeAllWindows()
+    app.processEvents()
+    qInstallMessageHandler(None)
 
 
 @pytest.fixture(autouse=True)
@@ -58,6 +62,8 @@ def test_main_window_init(qapp):
     assert window.combo_measure_mode.itemData(2) == 5  # 5-run mode
 
     window.close()
+    window.deleteLater()
+    qapp.processEvents()
 
 
 def test_plot_widget_perf_and_offset(qapp):
@@ -124,6 +130,8 @@ def test_plot_widget_perf_and_offset(qapp):
     assert widget._is_zoomed_view
 
     widget.close()
+    widget.deleteLater()
+    qapp.processEvents()
 
 
 def test_plot_widget_compute_envelope():
@@ -245,6 +253,8 @@ def test_main_window_apply_measured(qapp):
     assert "反映済み" in win.btn_apply_measured.text()
 
     win.close()
+    win.deleteLater()
+    qapp.processEvents()
 
 
 
@@ -297,6 +307,8 @@ def test_obs_fetch_and_diff_flow(qapp, monkeypatch):
     assert win.spin_offset.value() == 0.0
 
     win.close()
+    win.deleteLater()
+    qapp.processEvents()
 
 
 def test_multilingual_switching(qapp):
@@ -379,6 +391,8 @@ def test_multilingual_switching(qapp):
     assert win.plot_widget.btn_zoom_view.text() == "🔍 拡大表示 (山谷確認)"
 
     win.close()
+    win.deleteLater()
+    qapp.processEvents()
 
 
 def test_video_sync_gui_flow(qapp):
@@ -441,6 +455,8 @@ def test_video_sync_gui_flow(qapp):
         assert "185" in win.combo_obs_video_source.currentText()
 
     win.close()
+    win.deleteLater()
+    qapp.processEvents()
 
 
 def test_device_refresh_and_audio_diagnostics(qapp):
@@ -484,6 +500,9 @@ def test_device_refresh_and_audio_diagnostics(qapp):
     assert "音量不足" in win.jitter_badge.text()
 
     win.close()
+    win.deleteLater()
+    qapp.processEvents()
+    qapp.processEvents()
 
 
 
