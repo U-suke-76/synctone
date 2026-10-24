@@ -50,13 +50,13 @@ class SyncPlotWidget(QWidget):
 
     def _init_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 8)
-        layout.setSpacing(10)
+        layout.setContentsMargins(0, 0, 0, 2)
+        layout.setSpacing(6)
 
         # Controls bar above plots
         ctrl_layout = QHBoxLayout()
         ctrl_layout.setContentsMargins(4, 0, 4, 0)
-        ctrl_layout.setSpacing(12)
+        ctrl_layout.setSpacing(10)
 
         self.align_checkbox = QCheckBox()
         self.align_checkbox.setChecked(True)
@@ -95,10 +95,12 @@ class SyncPlotWidget(QWidget):
         self.waveform_plot.setBackground("#1a1a24")
         self.waveform_plot.showGrid(x=True, y=True, alpha=0.25)
         self.waveform_plot.setYRange(-1.15, 1.15)
-        self.waveform_plot.setMinimumHeight(140)
+        self.waveform_plot.setMinimumHeight(175)
         self.waveform_plot.plotItem.hideButtons()
-        self.waveform_plot.getAxis('left').setWidth(44)
-        self.waveform_plot.getAxis('bottom').setHeight(38)
+        self.waveform_plot.plotItem.layout.setContentsMargins(4, 4, 8, 4)
+        self.waveform_plot.getAxis('left').setWidth(42)
+        self.waveform_plot.getAxis('bottom').setHeight(32)
+        self.waveform_plot.getAxis('bottom').setStyle(tickTextOffset=4)
 
         # Waveform curves (Solid colors + segmentedLineMode='on' for ultra-fast GPU/C++ line rendering)
         ref_pen = pg.mkPen(color=QColor(0, 229, 255, 255), width=1.5)
@@ -125,10 +127,12 @@ class SyncPlotWidget(QWidget):
         self.corr_plot = pg.PlotWidget()
         self.corr_plot.setBackground("#1a1a24")
         self.corr_plot.showGrid(x=True, y=True, alpha=0.25)
-        self.corr_plot.setMinimumHeight(125)
+        self.corr_plot.setMinimumHeight(145)
         self.corr_plot.plotItem.hideButtons()
-        self.corr_plot.getAxis('left').setWidth(44)
-        self.corr_plot.getAxis('bottom').setHeight(38)
+        self.corr_plot.plotItem.layout.setContentsMargins(4, 4, 8, 4)
+        self.corr_plot.getAxis('left').setWidth(42)
+        self.corr_plot.getAxis('bottom').setHeight(32)
+        self.corr_plot.getAxis('bottom').setStyle(tickTextOffset=4)
         self.corr_plot.getAxis('left').enableAutoSIPrefix(False)
         self.corr_plot.setXRange(-50, 350)
         self.corr_plot.setYRange(0, 1.0)
@@ -155,9 +159,10 @@ class SyncPlotWidget(QWidget):
         self.peak_scatter.setVisible(False)
 
         # Peak label above summit
-        self.peak_text = pg.TextItem(color='#00e676', anchor=(0.5, 1.3))
+        self.peak_text = pg.TextItem(color='#00e676', anchor=(0.5, 1.15))
         self.corr_plot.addItem(self.peak_text)
         self.peak_text.setVisible(False)
+
 
         layout.addWidget(self.corr_plot, stretch=2)
 
@@ -179,13 +184,14 @@ class SyncPlotWidget(QWidget):
             f"<span style='color:#ff4081; font-weight:bold;'>{t('plot_legend_rec')}</span>"
         )
 
-        self.waveform_plot.setTitle(t("plot_waveform_title"))
-        self.waveform_plot.setLabel("bottom", t("plot_waveform_xlabel"), units="s")
+        self.waveform_plot.setTitle(t("plot_waveform_title"), size="9.5pt", color="#ccccdd")
+        self.waveform_plot.setLabel("bottom", f"{t('plot_waveform_xlabel')} (s)")
         self.waveform_plot.setLabel("left", t("plot_waveform_ylabel"))
 
-        self.corr_plot.setTitle(t("plot_corr_title"))
-        self.corr_plot.setLabel("bottom", t("plot_corr_xlabel"), units="ms")
+        self.corr_plot.setTitle(t("plot_corr_title"), size="9.5pt", color="#ccccdd")
+        self.corr_plot.setLabel("bottom", f"{t('plot_corr_xlabel')} (ms)")
         self.corr_plot.setLabel("left", t("plot_corr_ylabel"))
+
 
     def set_data(
         self,
@@ -266,10 +272,11 @@ class SyncPlotWidget(QWidget):
             self.peak_text.setPos(peak_x, peak_y)
             self.peak_text.setVisible(True)
 
-            # Fit Y-axis to the detected peak so the mountain is clearly visible and never flat
+            # Fit Y-axis to the detected peak so the mountain and its label are clearly visible and never clipped
             peak_val = max(0.1, peak_y)
             min_val = min(0.0, float(np.min(corr_env)))
-            self.corr_plot.setYRange(min(-0.02, min_val * 1.1), peak_val * 1.25)
+            self.corr_plot.setYRange(min(-0.02, min_val * 1.1), peak_val * 1.42)
+
         else:
             self._has_corr_data = False
             self.curve_corr.clear()

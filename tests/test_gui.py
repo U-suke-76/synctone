@@ -204,11 +204,13 @@ def test_main_window_apply_measured(qapp):
     # User's choice of zoom view is preserved!
     assert win.plot_widget._is_zoomed_view
 
-    # Click reflect button again so _has_applied_measured is True
+    # Click reflect button again, then manually fine-tune to 110.5ms
     win.btn_apply_measured.click()
     assert win.spin_offset.value() == 111.4
+    win.spin_offset.setValue(110.5)
+    assert win.spin_offset.value() == 110.5
 
-    # Now simulate a second measurement (e.g., verifying delay after OBS or adjustment)
+    # Now simulate a second measurement (111.3ms)
     dummy_second_single = DelayEstimateResult(
         delay_ms=111.3,
         delay_samples=5342.4,
@@ -229,14 +231,21 @@ def test_main_window_apply_measured(qapp):
     )
     win._on_measurement_finished(dummy_second_multi, dummy_recorded)
 
-    # Since it was already applied, it MUST NOT reset to 0ms! It should auto-apply 111.3ms!
+    # Manual offset MUST NOT be overwritten automatically! It stays at 110.5ms until button is clicked!
+    assert win.spin_offset.value() == 110.5
+    assert win.slider_offset.value() == 1105
+    assert win.plot_widget._is_zoomed_view
+    assert "111.3" in win.btn_apply_measured.text()
+    assert "反映済み" not in win.btn_apply_measured.text()
+
+    # Clicking the button explicitly applies the new 111.3ms measurement
+    win.btn_apply_measured.click()
     assert win.spin_offset.value() == 111.3
     assert win.slider_offset.value() == 1113
-    # And user's chosen view (zoom view) is preserved!
-    assert win.plot_widget._is_zoomed_view
     assert "反映済み" in win.btn_apply_measured.text()
 
     win.close()
+
 
 
 def test_obs_fetch_and_diff_flow(qapp, monkeypatch):
@@ -424,7 +433,58 @@ def test_video_sync_gui_flow(qapp):
         assert win.obs_video_sources[0].render_delay_ms == 180
         assert "180" in win.combo_obs_video_source.currentText()
 
+        # Verify that trimming from SyncVerifierWindow also updates linked video render delay
+        mock_set_video.return_value = 185
+        win._on_verifier_offset_changed(185.0)
+        mock_set_video.assert_called_with("Game Capture HD", 185)
+        assert win.obs_video_sources[0].render_delay_ms == 185
+        assert "185" in win.combo_obs_video_source.currentText()
+
     win.close()
+
+
+def test_device_refresh_and_audio_diagnostics(qapp):
+    """Verify device refresh button and clipping/low-volume diagnostics in MainWindow."""
+    import numpy as np
+    from synctone.gui.main_window import MainWindow
+    from synctone.core.chirp import MultiMeasureResult, DelayEstimateResult
+
+    win = MainWindow()
+    assert hasattr(win, "refresh_devices_btn")
+    assert "更新" in win.refresh_devices_btn.text()
+    win.refresh_devices_btn.click()
+
+    dummy_single = DelayEstimateResult(
+        delay_ms=80.0,
+        delay_samples=3840.0,
+        confidence=0.95,
+        peak_correlation=0.95,
+        correlation=np.array([0.1, 0.95, 0.1]),
+        lags=np.array([3839, 3840, 3841]),
+        is_inverted=False,
+    )
+    dummy_multi = MultiMeasureResult(
+        individual_results=[dummy_single],
+        median_delay_ms=80.0,
+        mean_delay_ms=80.0,
+        jitter_ms=0.0,
+        overall_confidence=0.95,
+        best_index=0,
+        best_result=dummy_single,
+    )
+
+    # 1. Clipping signal (peak = 0.995)
+    clipped_rec = np.full(48000, 0.995, dtype=np.float32)
+    win._on_measurement_finished(dummy_multi, clipped_rec)
+    assert "音割れ" in win.jitter_badge.text()
+
+    # 2. Very weak signal (peak = 0.005)
+    weak_rec = np.full(48000, 0.005, dtype=np.float32)
+    win._on_measurement_finished(dummy_multi, weak_rec)
+    assert "音量不足" in win.jitter_badge.text()
+
+    win.close()
+
 
 
 

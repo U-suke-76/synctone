@@ -64,6 +64,27 @@ class AudioEngine:
 
         return output_devices, input_devices
 
+    def set_sample_rate(self, sample_rate: int) -> None:
+        """Update target sample rate."""
+        self.sample_rate = int(sample_rate)
+
+    @staticmethod
+    def get_device_default_samplerate(
+        output_device_idx: Optional[int] = None,
+        input_device_idx: Optional[int] = None,
+        fallback: int = 44100,
+    ) -> int:
+        """Query the hardware default sample rate for the selected input/output device."""
+        for dev_idx, kind in [(input_device_idx, "input"), (output_device_idx, "output")]:
+            try:
+                info = sd.query_devices(dev_idx, kind)
+                sr = int(round(float(info.get("default_samplerate", 0))))
+                if sr >= 8000:
+                    return sr
+            except Exception:
+                pass
+        return fallback
+
     def play_and_record(
         self,
         playback_data: np.ndarray,
@@ -82,15 +103,22 @@ class AudioEngine:
         Returns:
             1D numpy array of recorded audio (monaural, float32).
         """
-        # Ensure 1D or 2D (stereo)
         play_samples = np.asarray(playback_data, dtype=np.float32)
-        if play_samples.ndim == 1:
-            # Play through both L/R channels
-            play_signal = np.column_stack([play_samples, play_samples])
-        else:
-            play_signal = play_samples
+        extra_samples = max(0, int(self.sample_rate * record_extra_seconds))
 
-        total_record_samples = len(play_samples) + int(self.sample_rate * record_extra_seconds)
+        # Pad trailing silence so sd.playrec continues recording for record_extra_seconds after chirp finishes
+        if play_samples.ndim == 1:
+            if extra_samples > 0:
+                padded_1d = np.concatenate([play_samples, np.zeros(extra_samples, dtype=np.float32)])
+            else:
+                padded_1d = play_samples
+            play_signal = np.column_stack([padded_1d, padded_1d])
+        else:
+            if extra_samples > 0:
+                pad_2d = np.zeros((extra_samples, play_samples.shape[1]), dtype=np.float32)
+                play_signal = np.vstack([play_samples, pad_2d])
+            else:
+                play_signal = play_samples
 
         # Execute synchronized play and record
         device_pair = (input_device_idx, output_device_idx)
@@ -104,3 +132,4 @@ class AudioEngine:
         )
 
         return recorded.flatten()
+

@@ -174,11 +174,34 @@ class SyncAudioPlayer:
             self._use_fallback = False
             self._is_running = True
         except Exception:
+            # Try device default sample rate (e.g. 44100 Hz) if 48000 Hz is rejected by hardware
+            try:
+                dev_info = sd.query_devices(self.output_device_idx, "output")
+                alt_sr = int(round(float(dev_info.get("default_samplerate", 44100))))
+                if alt_sr >= 8000 and alt_sr != self.sample_rate:
+                    self.sample_rate = alt_sr
+                    self._tone_samples = self._prepare_tone()
+                    self._cycle_samples = self._calc_cycle_samples()
+                    self._stream = sd.OutputStream(
+                        samplerate=self.sample_rate,
+                        channels=2,
+                        dtype="float32",
+                        device=self.output_device_idx,
+                        callback=self._audio_callback,
+                        blocksize=512,
+                    )
+                    self._stream.start()
+                    self._use_fallback = False
+                    self._is_running = True
+                    return
+            except Exception:
+                pass
             # Fallback for devices without working hardware output (headless / mock test)
             self._stream = None
             self._fallback_start_time = time.perf_counter()
             self._use_fallback = True
             self._is_running = True
+
 
     def stop(self) -> None:
         """Stop playback and close audio stream immediately without deadlocks."""

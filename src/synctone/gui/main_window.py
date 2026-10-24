@@ -43,16 +43,17 @@ class TestToneWorker(QThread):
         self.amplitude = amplitude
 
     def run(self):
-        try:
-            sr = 48000
-            # 0.25 second gentle sine tone (880 Hz, A5) with smooth envelope
-            t = np.linspace(0, 0.25, int(sr * 0.25), endpoint=False)
-            tone = np.sin(2 * np.pi * 880 * t) * self.amplitude * 0.5
-            fade = np.sin(np.linspace(0, np.pi, len(tone)))
-            stereo = np.column_stack([tone * fade, tone * fade]).astype(np.float32)
-            sd.play(stereo, samplerate=sr, device=self.out_device_idx, blocking=True)
-        except Exception:
-            pass
+        for sr in [48000, AudioEngine.get_device_default_samplerate(output_device_idx=self.out_device_idx, fallback=44100)]:
+            try:
+                # 0.25 second gentle sine tone (880 Hz, A5) with smooth envelope
+                t = np.linspace(0, 0.25, int(sr * 0.25), endpoint=False)
+                tone = np.sin(2 * np.pi * 880 * t) * self.amplitude * 0.5
+                fade = np.sin(np.linspace(0, np.pi, len(tone)))
+                stereo = np.column_stack([tone * fade, tone * fade]).astype(np.float32)
+                sd.play(stereo, samplerate=sr, device=self.out_device_idx, blocking=True)
+                break
+            except Exception:
+                continue
 
 
 class MeasurementWorker(QThread):
@@ -84,12 +85,30 @@ class MeasurementWorker(QThread):
             for run_idx in range(self.total_runs):
                 self.step_progress.emit(run_idx + 1, self.total_runs)
                 ref_sig = self.analyzer.reference_signal
-                recorded = self.audio_engine.play_and_record(
-                    playback_data=ref_sig,
-                    output_device_idx=self.out_device_idx,
-                    input_device_idx=self.in_device_idx,
-                    record_extra_seconds=0.4,
-                )
+                try:
+                    recorded = self.audio_engine.play_and_record(
+                        playback_data=ref_sig,
+                        output_device_idx=self.out_device_idx,
+                        input_device_idx=self.in_device_idx,
+                        record_extra_seconds=0.4,
+                    )
+                except Exception:
+                    # Fallback to device native sample rate (e.g. 44100 Hz) if 48000 Hz fails
+                    alt_sr = AudioEngine.get_device_default_samplerate(
+                        output_device_idx=self.out_device_idx,
+                        input_device_idx=self.in_device_idx,
+                        fallback=44100,
+                    )
+                    self.audio_engine.set_sample_rate(alt_sr)
+                    self.analyzer.set_sample_rate(alt_sr)
+                    ref_sig = self.analyzer.reference_signal
+                    recorded = self.audio_engine.play_and_record(
+                        playback_data=ref_sig,
+                        output_device_idx=self.out_device_idx,
+                        input_device_idx=self.in_device_idx,
+                        record_extra_seconds=0.4,
+                    )
+
                 res = self.analyzer.estimate_delay(recorded_signal=recorded)
                 results.append(res)
                 recordeds.append(recorded)
@@ -104,14 +123,15 @@ class MeasurementWorker(QThread):
             self.error_occurred.emit(str(e))
 
 
+
 class MainWindow(QMainWindow):
     """Main window of SyncTone application."""
 
     def __init__(self):
         super().__init__()
         self.setWindowTitle("SyncTone - OBS音声同期アシスタント")
-        self.resize(1020, 880)
-        self.setMinimumSize(850, 750)
+        self.resize(1140, 950)
+        self.setMinimumSize(980, 820)
 
         # Settings
         self.settings = QSettings("SyncTone", "SyncTone")
@@ -150,8 +170,8 @@ class MainWindow(QMainWindow):
             QGroupBox {
                 border: 1px solid #2a2a38;
                 border-radius: 8px;
-                margin-top: 10px;
-                padding-top: 15px;
+                margin-top: 8px;
+                padding-top: 12px;
                 font-weight: bold;
                 color: #82aaff;
             }
@@ -160,6 +180,7 @@ class MainWindow(QMainWindow):
                 subcontrol-position: top left;
                 padding: 0 8px;
             }
+
             QPushButton {
                 background-color: #1e1e2c;
                 border: 1px solid #3d3d52;
@@ -315,8 +336,8 @@ class MainWindow(QMainWindow):
         central_widget = QWidget(self)
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(12, 10, 12, 10)
-        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(12, 6, 12, 6)
+        main_layout.setSpacing(6)
 
         # 0. Header bar: Language selector
         header_bar = QHBoxLayout()
@@ -343,10 +364,10 @@ class MainWindow(QMainWindow):
 
         # 1-A. OBS Connection Box
         self.obs_box = QGroupBox()
-        self.obs_box.setMinimumWidth(320)
+        self.obs_box.setMinimumWidth(310)
         obs_layout = QGridLayout(self.obs_box)
-        obs_layout.setContentsMargins(10, 12, 10, 10)
-        obs_layout.setSpacing(8)
+        obs_layout.setContentsMargins(10, 8, 10, 8)
+        obs_layout.setSpacing(6)
 
         self.label_host_port = QLabel()
         obs_layout.addWidget(self.label_host_port, 0, 0)
@@ -378,19 +399,19 @@ class MainWindow(QMainWindow):
         btn_status_layout.addWidget(self.obs_status_label)
         obs_layout.addLayout(btn_status_layout, 2, 0, 1, 2)
 
-        top_layout.addWidget(self.obs_box, stretch=4)
+        top_layout.addWidget(self.obs_box, stretch=3)
 
         # 1-B. Audio Hardware Device Selection & Volume Box
         self.device_box = QGroupBox()
         dev_layout = QGridLayout(self.device_box)
-        dev_layout.setContentsMargins(10, 12, 10, 10)
-        dev_layout.setSpacing(8)
+        dev_layout.setContentsMargins(10, 8, 10, 8)
+        dev_layout.setSpacing(6)
 
         self.label_playback = QLabel()
         dev_layout.addWidget(self.label_playback, 0, 0)
         self.combo_out_device = QComboBox()
         self.combo_out_device.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.combo_out_device.view().setMinimumWidth(420)
+        self.combo_out_device.view().setMinimumWidth(460)
         self.combo_out_device.currentIndexChanged.connect(self._on_device_selection_changed)
         dev_layout.addWidget(self.combo_out_device, 0, 1)
 
@@ -398,7 +419,7 @@ class MainWindow(QMainWindow):
         dev_layout.addWidget(self.label_recording, 1, 0)
         self.combo_in_device = QComboBox()
         self.combo_in_device.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.combo_in_device.view().setMinimumWidth(420)
+        self.combo_in_device.view().setMinimumWidth(460)
         self.combo_in_device.currentIndexChanged.connect(self._on_device_selection_changed)
         dev_layout.addWidget(self.combo_in_device, 1, 1)
 
@@ -416,30 +437,35 @@ class MainWindow(QMainWindow):
         self.test_tone_btn = QPushButton()
         self.test_tone_btn.clicked.connect(self._play_test_tone)
 
+        self.refresh_devices_btn = QPushButton()
+        self.refresh_devices_btn.clicked.connect(self._refresh_audio_devices)
+
         vol_layout.addWidget(self.vol_slider)
         vol_layout.addWidget(self.vol_label)
         vol_layout.addWidget(self.test_tone_btn)
+        vol_layout.addWidget(self.refresh_devices_btn)
         dev_layout.addLayout(vol_layout, 2, 1)
 
         top_layout.addWidget(self.device_box, stretch=5)
-        main_layout.addLayout(top_layout)
+        main_layout.addLayout(top_layout, stretch=0)
 
-        # 2. Middle Section: Plots (Waveform and Cross-Correlation)
+        # 2. Middle Section: Plots (Waveform and Cross-Correlation) - Give maximum vertical expansion!
         self.plot_box = QGroupBox()
-        self.plot_box.setMinimumHeight(320)
+        self.plot_box.setMinimumHeight(390)
+        self.plot_box.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         plot_layout = QVBoxLayout(self.plot_box)
-        plot_layout.setContentsMargins(8, 10, 8, 16)
+        plot_layout.setContentsMargins(8, 6, 8, 8)
         self.plot_widget = SyncPlotWidget(self)
-        self.plot_widget.setMinimumHeight(290)
+        self.plot_widget.setMinimumHeight(360)
+        self.plot_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         plot_layout.addWidget(self.plot_widget)
-        main_layout.addWidget(self.plot_box, stretch=5)
+        main_layout.addWidget(self.plot_box, stretch=10)
 
         # 3. Bottom Section: Measurement & OBS Application Panel
         self.bottom_box = QGroupBox()
-        self.bottom_box.setMinimumHeight(245)
         bottom_layout = QVBoxLayout(self.bottom_box)
-        bottom_layout.setContentsMargins(12, 14, 12, 12)
-        bottom_layout.setSpacing(10)
+        bottom_layout.setContentsMargins(10, 8, 10, 8)
+        bottom_layout.setSpacing(8)
 
         # Top row: Measure button, mode selection, progress bar
         measure_row = QHBoxLayout()
@@ -473,14 +499,14 @@ class MainWindow(QMainWindow):
 
         # Results and Adjustment Row
         result_row = QHBoxLayout()
-        result_row.setSpacing(12)
+        result_row.setSpacing(10)
 
-        # Result badge (Median + Runs history + Jitter) - Slimmer width, utilizing vertical space
+        # Result badge (Median + Runs history + Jitter)
         res_frame = QFrame()
-        res_frame.setStyleSheet("background-color: #1a1a26; border-radius: 6px; padding: 6px;")
+        res_frame.setStyleSheet("background-color: #1a1a26; border-radius: 6px; padding: 4px;")
         res_layout = QVBoxLayout(res_frame)
-        res_layout.setContentsMargins(8, 8, 8, 8)
-        res_layout.setSpacing(6)
+        res_layout.setContentsMargins(8, 6, 8, 6)
+        res_layout.setSpacing(5)
 
         self.delay_label = QLabel("検出遅延: -- ms")
         self.delay_label.setFont(QFont("Segoe UI", 15, QFont.Weight.Bold))
@@ -498,14 +524,14 @@ class MainWindow(QMainWindow):
         res_layout.addWidget(self.runs_label)
         res_layout.addWidget(self.jitter_badge)
         res_layout.addStretch()
-        result_row.addWidget(res_frame, stretch=2)
+        result_row.addWidget(res_frame, stretch=3)
 
         # Manual Adjustment Controls - 2-tier button layout to eliminate horizontal crowding
         adj_frame = QFrame()
-        adj_frame.setStyleSheet("background-color: #1a1a26; border-radius: 6px; padding: 6px;")
+        adj_frame.setStyleSheet("background-color: #1a1a26; border-radius: 6px; padding: 4px;")
         adj_layout = QVBoxLayout(adj_frame)
         adj_layout.setContentsMargins(8, 6, 8, 6)
-        adj_layout.setSpacing(6)
+        adj_layout.setSpacing(5)
 
         # Row 1: Primary action button (Full width)
         self.btn_apply_measured = QPushButton()
@@ -577,7 +603,7 @@ class MainWindow(QMainWindow):
         self.spin_offset.setDecimals(1)
         self.spin_offset.setSingleStep(0.1)
         self.spin_offset.setSuffix(" ms")
-        self.spin_offset.setMinimumWidth(100)
+        self.spin_offset.setMinimumWidth(105)
         self.spin_offset.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.spin_offset.valueChanged.connect(self._on_spinbox_changed)
         spin_row.addWidget(self.spin_offset)
@@ -613,14 +639,15 @@ class MainWindow(QMainWindow):
         self.slider_offset.setRange(0, 10000)  # 0.0 to 1000.0 ms (0.1ms step)
         self.slider_offset.valueChanged.connect(self._on_slider_changed)
         adj_layout.addWidget(self.slider_offset)
+        adj_layout.addStretch()
         result_row.addWidget(adj_frame, stretch=4)
 
         # OBS Target and Apply - Widest stretch to accommodate long source names
         apply_frame = QFrame()
-        apply_frame.setStyleSheet("background-color: #1a1a26; border-radius: 6px; padding: 6px;")
+        apply_frame.setStyleSheet("background-color: #1a1a26; border-radius: 6px; padding: 4px;")
         apply_layout = QVBoxLayout(apply_frame)
-        apply_layout.setContentsMargins(8, 4, 8, 4)
-        apply_layout.setSpacing(4)
+        apply_layout.setContentsMargins(8, 6, 8, 6)
+        apply_layout.setSpacing(5)
 
         target_header = QHBoxLayout()
         target_header.setSpacing(6)
@@ -640,8 +667,8 @@ class MainWindow(QMainWindow):
         self.combo_obs_source.setEnabled(False)
         self.combo_obs_source.setMinimumHeight(26)
         self.combo_obs_source.currentIndexChanged.connect(self._on_obs_source_selected)
-        # Ensure dropdown popup list is wide enough (380px) so long source names never truncate with '...'
-        self.combo_obs_source.view().setMinimumWidth(380)
+        # Ensure dropdown popup list is wide enough (420px) so long source names never truncate with '...'
+        self.combo_obs_source.view().setMinimumWidth(420)
         apply_layout.addWidget(self.combo_obs_source)
 
         status_row = QHBoxLayout()
@@ -657,21 +684,21 @@ class MainWindow(QMainWindow):
 
         # Video source synchronization (Render Delay)
         self.check_sync_video = QCheckBox()
-        self.check_sync_video.setStyleSheet("font-size: 11px; color: #aaccff; margin-top: 3px; margin-bottom: 2px;")
+        self.check_sync_video.setStyleSheet("font-size: 11px; color: #aaccff; margin-top: 2px; margin-bottom: 1px;")
         self.check_sync_video.toggled.connect(self._on_video_check_toggled)
         apply_layout.addWidget(self.check_sync_video)
 
         self.video_container = QWidget()
         video_layout = QVBoxLayout(self.video_container)
-        video_layout.setContentsMargins(0, 0, 0, 0)
-        video_layout.setSpacing(2)
+        video_layout.setContentsMargins(0, 0, 0, 2)
+        video_layout.setSpacing(4)
 
         self.combo_obs_video_source = QComboBox()
         self.combo_obs_video_source.addItem("OBS未接続 (映像ソース選択不可)")
         self.combo_obs_video_source.setEnabled(False)
         self.combo_obs_video_source.setMinimumHeight(26)
         self.combo_obs_video_source.currentIndexChanged.connect(self._on_obs_video_source_selected)
-        self.combo_obs_video_source.view().setMinimumWidth(380)
+        self.combo_obs_video_source.view().setMinimumWidth(420)
         video_layout.addWidget(self.combo_obs_video_source)
 
         video_status_row = QHBoxLayout()
@@ -684,6 +711,8 @@ class MainWindow(QMainWindow):
         self.video_container.setVisible(False)
         apply_layout.addWidget(self.video_container)
 
+        apply_layout.addStretch()
+
         self.apply_btn = QPushButton()
         self.apply_btn.setObjectName("apply_btn")
         self.apply_btn.setEnabled(False)
@@ -693,7 +722,7 @@ class MainWindow(QMainWindow):
 
         result_row.addWidget(apply_frame, stretch=5)
         bottom_layout.addLayout(result_row)
-        main_layout.addWidget(self.bottom_box, stretch=3)
+        main_layout.addWidget(self.bottom_box, stretch=0)
 
         # Status Bar
         self.status_bar = QStatusBar()
@@ -702,6 +731,7 @@ class MainWindow(QMainWindow):
         # Initial translation
         self.retranslate_ui()
         self.status_bar.showMessage(t("status_ready"))
+
 
     def _on_language_changed(self, index: int) -> None:
         """Handle language selection change from header dropdown."""
@@ -739,6 +769,8 @@ class MainWindow(QMainWindow):
         self.label_volume.setText(t("audio_volume"))
         self.test_tone_btn.setText(t("audio_test_tone"))
         self.test_tone_btn.setToolTip(t("audio_test_tooltip"))
+        self.refresh_devices_btn.setText(t("audio_refresh"))
+        self.refresh_devices_btn.setToolTip(t("audio_refresh_tooltip"))
 
         # Group 3: Plot Widget
         self.plot_box.setTitle(t("plot_group"))
@@ -824,23 +856,12 @@ class MainWindow(QMainWindow):
             else:
                 self.runs_label.setText(t("single_run", run=runs_strs[0]))
 
-            if len(self.last_multi_result.individual_results) > 1:
-                jitter = self.last_multi_result.jitter_ms
-                if jitter < 0.05:
-                    self.jitter_badge.setText(t("badge_perfect"))
-                elif jitter <= 1.0:
-                    self.jitter_badge.setText(t("badge_max_diff_stable", diff=jitter))
-                elif jitter <= 3.0:
-                    self.jitter_badge.setText(t("badge_max_diff_moderate", diff=jitter))
-                else:
-                    self.jitter_badge.setText(t("badge_max_diff_noisy", diff=jitter))
-            else:
-                conf_pct = int(self.last_multi_result.overall_confidence * 100)
-                self.jitter_badge.setText(t("badge_confidence", conf=conf_pct))
+            self._update_stability_and_level_badge(self.last_multi_result, self.last_recorded)
         else:
             self.delay_label.setText(t("detected_delay", delay=0.0).replace("0.0", "--"))
             self.runs_label.setText(f"{t('runs_history', history='--').split(':')[0]}: --")
             self.jitter_badge.setText(t("badge_pending"))
+
 
     # --- Settings Persistence ---
     def _load_saved_settings(self) -> None:
@@ -1254,72 +1275,31 @@ class MainWindow(QMainWindow):
         else:
             self.runs_label.setText(t("single_run", run=runs_strs[0]))
 
-        # Jitter and stability badge
-        if len(multi.individual_results) > 1:
-            jitter = multi.jitter_ms
-            if jitter < 0.05:
-                stab_txt = t("badge_perfect")
-                stab_color = "#00e676"
-            elif jitter <= 1.0:
-                stab_txt = t("badge_max_diff_stable", diff=jitter)
-                stab_color = "#00e676"
-            elif jitter <= 3.0:
-                stab_txt = t("badge_max_diff_moderate", diff=jitter)
-                stab_color = "#ffca28"
-            else:
-                stab_txt = t("badge_max_diff_noisy", diff=jitter)
-                stab_color = "#ff5252"
-            self.jitter_badge.setText(stab_txt)
-            self.jitter_badge.setStyleSheet(f"color: {stab_color}; font-weight: bold; font-size: 11px;")
-        else:
-            conf_pct = int(multi.overall_confidence * 100)
-            self.jitter_badge.setText(t("badge_confidence", conf=conf_pct))
-            self.jitter_badge.setStyleSheet("color: #00e676; font-weight: bold; font-size: 11px;")
+        # Jitter, stability, and audio signal level diagnostics badge
+        self._update_stability_and_level_badge(multi, best_recorded)
 
-        # Set manual adjustment controls with 0.1ms precision
+
+        # Set manual adjustment controls with 0.1ms precision (preserve user's current manual offset!)
         precise_ms = round(median_ms, 1)
         self._last_measured_delay_ms = precise_ms
         self.btn_apply_measured.setEnabled(True)
 
-        if self._has_applied_measured or self.spin_offset.value() > 0.0:
-            self._has_applied_measured = True
-            self.spin_offset.blockSignals(True)
-            self.slider_offset.blockSignals(True)
-            self.spin_offset.setValue(precise_ms)
-            slider_val = int(round(min(1000.0, precise_ms) * 10))
-            self.slider_offset.setValue(slider_val)
-            self.spin_offset.blockSignals(False)
-            self.slider_offset.blockSignals(False)
-
+        current_offset_ms = round(float(self.spin_offset.value()), 1)
+        if abs(current_offset_ms - precise_ms) < 0.05 and precise_ms > 0.0:
             self.btn_apply_measured.setText(t("btn_applied_measured", delay=precise_ms))
-
-            self.plot_widget.set_data(
-                ref_signal=self.analyzer.reference_signal,
-                rec_signal=best_recorded,
-                sample_rate=self.analyzer.sample_rate,
-                result=multi.best_result,
-                initial_offset_ms=precise_ms,
-            )
-            self.status_bar.showMessage(t("status_measured_auto", delay=precise_ms))
         else:
-            self.spin_offset.blockSignals(True)
-            self.slider_offset.blockSignals(True)
-            self.spin_offset.setValue(0.0)
-            self.slider_offset.setValue(0)
-            self.spin_offset.blockSignals(False)
-            self.slider_offset.blockSignals(False)
-
             self.btn_apply_measured.setText(t("btn_apply_measured", delay=precise_ms))
 
-            self.plot_widget.set_data(
-                ref_signal=self.analyzer.reference_signal,
-                rec_signal=best_recorded,
-                sample_rate=self.analyzer.sample_rate,
-                result=multi.best_result,
-                initial_offset_ms=0.0,
-            )
-            self.status_bar.showMessage(t("status_measured_guide", delay=precise_ms))
+        self.plot_widget.set_data(
+            ref_signal=self.analyzer.reference_signal,
+            rec_signal=best_recorded,
+            sample_rate=self.analyzer.sample_rate,
+            result=multi.best_result,
+            initial_offset_ms=current_offset_ms,
+        )
+        self.status_bar.showMessage(t("status_measured_guide", delay=precise_ms))
         self._update_obs_diff_display()
+
 
     def _on_measurement_error(self, error_msg: str) -> None:
         self.measure_btn.setEnabled(True)
@@ -1541,6 +1521,44 @@ class MainWindow(QMainWindow):
             self.verifier_window.raise_()
             self.verifier_window.activateWindow()
 
+    def _update_stability_and_level_badge(
+        self,
+        multi: MultiMeasureResult,
+        recorded: Optional[np.ndarray] = None,
+    ) -> None:
+        """Update jitter/stability badge and append audio level diagnostics (clipping/low volume)."""
+        if len(multi.individual_results) > 1:
+            jitter = multi.jitter_ms
+            if jitter < 0.05:
+                stab_txt = t("badge_perfect")
+                stab_color = "#00e676"
+            elif jitter <= 1.0:
+                stab_txt = t("badge_max_diff_stable", diff=jitter)
+                stab_color = "#00e676"
+            elif jitter <= 3.0:
+                stab_txt = t("badge_max_diff_moderate", diff=jitter)
+                stab_color = "#ffca28"
+            else:
+                stab_txt = t("badge_max_diff_noisy", diff=jitter)
+                stab_color = "#ff5252"
+        else:
+            conf_pct = int(multi.overall_confidence * 100)
+            stab_txt = t("badge_confidence", conf=conf_pct)
+            stab_color = "#00e676" if conf_pct >= 60 else "#ffca28"
+
+        # Check recorded signal peak level for clipping (>0.98) or near-silence (<0.015)
+        if recorded is not None and len(recorded) > 0:
+            peak_amp = float(np.max(np.abs(recorded)))
+            if peak_amp >= 0.98:
+                stab_txt = f"{stab_txt}\n{t('warn_clipping')}"
+                stab_color = "#ffca28"
+            elif 0.0 < peak_amp < 0.015:
+                stab_txt = f"{stab_txt}\n{t('warn_low_volume')}"
+                stab_color = "#ff5252"
+
+        self.jitter_badge.setText(stab_txt)
+        self.jitter_badge.setStyleSheet(f"color: {stab_color}; font-weight: bold; font-size: 11px;")
+
     def _on_verifier_offset_changed(self, new_val: float) -> None:
         """Callback when offset is trimmed from the verifier window."""
         self.spin_offset.blockSignals(True)
@@ -1550,8 +1568,40 @@ class MainWindow(QMainWindow):
         self.slider_offset.setValue(int(round(min(1000.0, new_val) * 10)))
         self.slider_offset.blockSignals(False)
         self.plot_widget.update_manual_offset(new_val)
-        self._latest_obs_offset = int(round(new_val))
+        target_int = int(round(new_val))
+        self._latest_obs_offset = target_int
+
+        # Update audio source combo & label in MainWindow
+        idx = self.combo_obs_source.currentIndex()
+        if 0 <= idx < len(self.obs_sources):
+            src = self.obs_sources[idx]
+            src.sync_offset_ms = target_int
+            self.current_offset_label.setText(t("current_obs_val", offset=target_int))
+            label = f"{src.name} [{target_int} ms]"
+            if "output" in src.kind.lower() or "desktop" in src.name.lower() or "オケ" in src.name or "デスクトップ" in src.name:
+                label += f" {t('obs_recommended_source')}"
+            self.combo_obs_source.setItemText(idx, label)
+            self.combo_obs_source.setItemData(idx, label, Qt.ItemDataRole.ToolTipRole)
+
+        # Also synchronize linked video source render delay if enabled
+        if self.obs_client.is_connected and self.check_sync_video.isChecked():
+            v_idx = self.combo_obs_video_source.currentIndex()
+            if 0 <= v_idx < len(self.obs_video_sources):
+                v_src = self.combo_obs_video_source.itemData(v_idx)
+                if isinstance(v_src, ObsVideoSource):
+                    try:
+                        actual_vid_ms = self.obs_client.set_render_delay(v_src.name, target_int)
+                        v_src.render_delay_ms = actual_vid_ms
+                        self._latest_obs_video_delay = actual_vid_ms
+                        v_label = f"{v_src.name} [{actual_vid_ms} ms]"
+                        self.combo_obs_video_source.setItemText(v_idx, v_label)
+                        self.combo_obs_video_source.setItemData(v_idx, v_label, Qt.ItemDataRole.ToolTipRole)
+                        self.current_video_delay_label.setText(t("current_video_delay_val", delay=actual_vid_ms))
+                    except Exception:
+                        pass
+
         self._update_obs_diff_display()
+
 
     def resizeEvent(self, event) -> None:
         """Handle window resizing smoothly in real-time."""

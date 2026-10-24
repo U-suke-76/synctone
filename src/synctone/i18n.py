@@ -48,6 +48,8 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "audio_volume": "測定音量:",
         "audio_test_tone": "音量試聴",
         "audio_test_tooltip": "イヤホンから短い確認音を鳴らして音量をチェックします",
+        "audio_refresh": "🔄 更新",
+        "audio_refresh_tooltip": "接続されているオーディオデバイス（イヤホン・マイク）の一覧を再読み込みします",
 
         # Plot Section
         "plot_group": "3. 測定波形・一致度可視化",
@@ -84,6 +86,8 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "badge_max_diff_noisy": "最大差: {diff:.1f}ms (環境音による乱れの可能性あり)",
         "badge_confidence": "信頼度: {conf}%",
         "badge_pending": "ばらつき: --",
+        "warn_clipping": "⚠️ 音割れ検知 (音量・ゲインを下げてください)",
+        "warn_low_volume": "⚠️ 入力音量不足 (イヤホンをマイクに密着させてください)",
 
         "btn_apply_measured": "⚡ 測定結果を反映 ({delay:.1f} ms)",
         "btn_apply_measured_unmeasured": "⚡ 測定結果を反映 (未測定)",
@@ -197,6 +201,8 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "audio_volume": "Test Tone Volume:",
         "audio_test_tone": "Test Sound",
         "audio_test_tooltip": "Plays a short confirmation tone to check volume level",
+        "audio_refresh": "🔄 Refresh",
+        "audio_refresh_tooltip": "Reload connected audio playback and recording devices",
 
         # Plot Section
         "plot_group": "3. Waveform & Alignment Visualizer",
@@ -233,6 +239,8 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "badge_max_diff_noisy": "Max diff: {diff:.1f}ms (Possible ambient noise)",
         "badge_confidence": "Confidence: {conf}%",
         "badge_pending": "Jitter: --",
+        "warn_clipping": "⚠️ Clipping detected (Lower mic gain or test volume)",
+        "warn_low_volume": "⚠️ Input signal too weak (Hold earphone closer to mic)",
 
         "btn_apply_measured": "⚡ Apply Measured ({delay:.1f} ms)",
         "btn_apply_measured_unmeasured": "⚡ Apply Measured (Unmeasured)",
@@ -346,6 +354,8 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "audio_volume": "측정 볼륨:",
         "audio_test_tone": "볼륨 테스트",
         "audio_test_tooltip": "이어폰에서 짧은 확인음을 재생하여 볼륨을 확인합니다",
+        "audio_refresh": "🔄 새로고침",
+        "audio_refresh_tooltip": "연결된 오디오 재생 및 녹음 장치 목록을 다시 불러옵니다",
 
         # Plot Section
         "plot_group": "3. 측정 파형 및 일치도 시각화",
@@ -382,6 +392,8 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "badge_max_diff_noisy": "최대 차이: {diff:.1f}ms (주변 소음 영향 가능성 있음)",
         "badge_confidence": "신뢰도: {conf}%",
         "badge_pending": "편차: --",
+        "warn_clipping": "⚠️ 클리핑(음 깨짐) 감지 (마이크 게인이나 볼륨을 낮춰주세요)",
+        "warn_low_volume": "⚠️ 입력 음량 부족 (이어폰을 마이크에 밀착시켜 주세요)",
 
         "btn_apply_measured": "⚡ 측정 결과 반영 ({delay:.1f} ms)",
         "btn_apply_measured_unmeasured": "⚡ 측정 결과 반영 (미측정)",
@@ -495,6 +507,8 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "audio_volume": "測量音量:",
         "audio_test_tone": "音量試聽",
         "audio_test_tooltip": "從耳機播放簡短確認音以檢查音量大小",
+        "audio_refresh": "🔄 重新整理",
+        "audio_refresh_tooltip": "重新載入已連接的音訊播放與錄音裝置列表",
 
         # Plot Section
         "plot_group": "3. 測量波形與一致性視覺化",
@@ -531,6 +545,8 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "badge_max_diff_noisy": "最大差值: {diff:.1f}ms (可能受環境噪音干擾)",
         "badge_confidence": "可信度: {conf}%",
         "badge_pending": "抖動: --",
+        "warn_clipping": "⚠️ 偵測到爆音/削波 (請調低麥克風增益或測量音量)",
+        "warn_low_volume": "⚠️ 輸入音量過低 (請將耳機緊貼麥克風)",
 
         "btn_apply_measured": "⚡ 套用測量結果 ({delay:.1f} ms)",
         "btn_apply_measured_unmeasured": "⚡ 套用測量結果 (未測量)",
@@ -644,6 +660,8 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "audio_volume": "测量音量:",
         "audio_test_tone": "音量试听",
         "audio_test_tooltip": "从耳机播放简短确认音以检查音量大小",
+        "audio_refresh": "🔄 刷新",
+        "audio_refresh_tooltip": "重新加载已连接的音频播放与录音设备列表",
 
         # Plot Section
         "plot_group": "3. 测量波形与对齐可视化",
@@ -680,6 +698,8 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "badge_max_diff_noisy": "最大差值: {diff:.1f}ms (可能受环境噪音干扰)",
         "badge_confidence": "置信度: {conf}%",
         "badge_pending": "抖动: --",
+        "warn_clipping": "⚠️ 检测到破音/削波 (请调低麦克风增益或测量音量)",
+        "warn_low_volume": "⚠️ 输入音量过低 (请将耳机贴紧麦克风)",
 
         "btn_apply_measured": "⚡ 应用测量结果 ({delay:.1f} ms)",
         "btn_apply_measured_unmeasured": "⚡ 应用测量结果 (未测量)",

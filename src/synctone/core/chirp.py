@@ -114,6 +114,13 @@ class ChirpAnalyzer:
         self.amplitude = max(0.05, min(1.0, float(amplitude)))
         self._reference_signal = self._generate_reference_signal()
 
+    def set_sample_rate(self, sample_rate: int) -> None:
+        """Update sampling frequency and regenerate reference signal if changed."""
+        new_sr = int(sample_rate)
+        if new_sr != self.sample_rate and new_sr >= 8000:
+            self.sample_rate = new_sr
+            self._reference_signal = self._generate_reference_signal()
+
     def _generate_reference_signal(self) -> np.ndarray:
         """Generate a log-chirp signal with smooth envelope windowing and padding."""
         n_samples_sweep = int(self.sample_rate * self.duration)

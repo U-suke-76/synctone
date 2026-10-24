@@ -128,3 +128,37 @@ def test_inverted_polarity_detection():
     assert abs(result.delay_ms - 100.0) < 0.05
     assert abs(result.peak_correlation) > 0.95
     assert result.confidence > 0.8
+
+
+def test_chirp_set_sample_rate():
+    """Verify dynamic sample rate update regenerates reference signal at new rate."""
+    analyzer = ChirpAnalyzer(sample_rate=48000, duration=0.8, pre_padding=0.1, post_padding=0.4)
+    assert len(analyzer.reference_signal) == int(48000 * 1.3)
+
+    analyzer.set_sample_rate(44100)
+    assert analyzer.sample_rate == 44100
+    assert len(analyzer.reference_signal) == int(44100 * 1.3)
+
+
+def test_audio_engine_play_and_record_padding(monkeypatch):
+    """Verify play_and_record pads playback signal by record_extra_seconds so long delays are not truncated."""
+    import sounddevice as sd
+    from synctone.core.audio_io import AudioEngine
+
+    captured_play_shapes = []
+
+    def mock_playrec(data, samplerate, channels, dtype, device, blocking):
+        captured_play_shapes.append(data.shape)
+        # Return simulated recorded buffer of the same frame length
+        return np.zeros((data.shape[0], channels), dtype=np.float32)
+
+    monkeypatch.setattr(sd, "playrec", mock_playrec)
+
+    engine = AudioEngine(sample_rate=48000)
+    ref_1s = np.ones(48000, dtype=np.float32)  # 1.0s
+
+    rec = engine.play_and_record(ref_1s, output_device_idx=0, input_device_idx=1, record_extra_seconds=0.5)
+    # Total recorded length must be 1.0s + 0.5s = 1.5s (72000 samples)
+    assert captured_play_shapes[0] == (72000, 2)
+    assert len(rec) == 72000
+
