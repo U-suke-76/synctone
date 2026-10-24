@@ -8,18 +8,6 @@ from PySide6.QtWidgets import QApplication
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 
-@pytest.fixture(scope="session")
-def qapp():
-    from PySide6.QtCore import qInstallMessageHandler
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    yield app
-    app.closeAllWindows()
-    app.processEvents()
-    qInstallMessageHandler(None)
-
-
 @pytest.fixture(autouse=True)
 def reset_language():
     """Ensure each test runs with a clean Japanese language baseline."""

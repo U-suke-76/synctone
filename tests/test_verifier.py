@@ -12,18 +12,6 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 os.environ["SYNCTONE_TEST_DUMMY_AUDIO"] = "1"
 
 
-@pytest.fixture(scope="session")
-def qapp():
-    from PySide6.QtCore import qInstallMessageHandler
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    yield app
-    app.closeAllWindows()
-    app.processEvents()
-    qInstallMessageHandler(None)
-
-
 @pytest.fixture(autouse=True)
 def reset_language():
     from synctone.i18n import I18nManager

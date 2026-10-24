@@ -20,8 +20,10 @@ class SyncPlotWidget(QWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
 
-        # Performance: Disable CPU-heavy antialiasing globally for pyqtgraph
-        pg.setConfigOptions(antialias=False)
+        # Performance: Disable CPU-heavy antialiasing and pyqtgraph's intrusive atexit cleanup
+        # (pyqtgraph.cleanup() closes all windows and deletes ViewBoxes during Python shutdown,
+        # which causes C++ Access Violations on Windows offscreen CI).
+        pg.setConfigOptions(antialias=False, exitCleanup=False)
 
         self._ref_signal: Optional[np.ndarray] = None
         self._rec_signal: Optional[np.ndarray] = None
