@@ -9,7 +9,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [1.1.0] - 2026-10-17
+## [1.1.0] - 2026-10-24
 
 ### Added
 - **Audio Device Refresh Button (`🔄 Refresh`)**: Added a one-click refresh button in the Audio Devices panel to reload connected earphones, audio interfaces, and microphones without restarting the application.
