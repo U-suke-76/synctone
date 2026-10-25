@@ -9,6 +9,12 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Live Microphone Input Level Meter (`🎤 Input Level`)**: Added an always-on, real-time input level meter (dB scale, green / yellow for low input / red with a clipping warning) to the Audio Devices panel so you can check the mic level before measuring. It restarts automatically when the recording device changes and fails silently (`N/A`) if the microphone cannot be opened.
+- **Live Level Display During Measurement**: The meter keeps moving while a measurement is running, fed directly by the measurement stream itself (`AudioEngine.play_and_record(level_callback=...)`), so no second stream competes for the microphone.
+
 ## [1.1.0] - 2026-10-24
 
 ### Added

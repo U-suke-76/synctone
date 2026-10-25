@@ -50,6 +50,10 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "audio_test_tooltip": "イヤホンから短い確認音を鳴らして音量をチェックします",
         "audio_refresh": "🔄 更新",
         "audio_refresh_tooltip": "接続されているオーディオデバイス（イヤホン・マイク）の一覧を再読み込みします",
+        "audio_level": "🎤 入力レベル",
+        "audio_level_tooltip": "マイクの入力レベルをリアルタイム表示します。測定前にイヤホンをマイクに近づけ、「音量試聴」を鳴らしてメーターが振れるか確認できます",
+        "audio_level_error": "マイクを開けませんでした: {error}",
+        "audio_level_clip": "音割れ注意",
 
         # Plot Section
         "plot_group": "3. 測定波形・一致度可視化",
@@ -203,6 +207,10 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "audio_test_tooltip": "Plays a short confirmation tone to check volume level",
         "audio_refresh": "🔄 Refresh",
         "audio_refresh_tooltip": "Reload connected audio playback and recording devices",
+        "audio_level": "🎤 Input Level",
+        "audio_level_tooltip": "Show the live microphone input level. Before measuring, hold the earphone to the mic and play the test tone to confirm the meter moves",
+        "audio_level_error": "Could not open the microphone: {error}",
+        "audio_level_clip": "Clipping",
 
         # Plot Section
         "plot_group": "3. Waveform & Alignment Visualizer",
@@ -356,6 +364,10 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "audio_test_tooltip": "이어폰에서 짧은 확인음을 재생하여 볼륨을 확인합니다",
         "audio_refresh": "🔄 새로고침",
         "audio_refresh_tooltip": "연결된 오디오 재생 및 녹음 장치 목록을 다시 불러옵니다",
+        "audio_level": "🎤 입력 레벨",
+        "audio_level_tooltip": "마이크 입력 레벨을 실시간으로 표시합니다. 측정 전에 이어폰을 마이크에 가까이 대고 테스트 톤을 재생해 미터가 움직이는지 확인하세요",
+        "audio_level_error": "마이크를 열 수 없습니다: {error}",
+        "audio_level_clip": "클리핑 주의",
 
         # Plot Section
         "plot_group": "3. 측정 파형 및 일치도 시각화",
@@ -509,6 +521,10 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "audio_test_tooltip": "從耳機播放簡短確認音以檢查音量大小",
         "audio_refresh": "🔄 重新整理",
         "audio_refresh_tooltip": "重新載入已連接的音訊播放與錄音裝置列表",
+        "audio_level": "🎤 輸入音量",
+        "audio_level_tooltip": "即時顯示麥克風輸入音量。測量前請將耳機靠近麥克風並播放測試音，確認音量表有反應",
+        "audio_level_error": "無法開啟麥克風: {error}",
+        "audio_level_clip": "注意爆音",
 
         # Plot Section
         "plot_group": "3. 測量波形與一致性視覺化",
@@ -662,6 +678,10 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "audio_test_tooltip": "从耳机播放简短确认音以检查音量大小",
         "audio_refresh": "🔄 刷新",
         "audio_refresh_tooltip": "重新加载已连接的音频播放与录音设备列表",
+        "audio_level": "🎤 输入电平",
+        "audio_level_tooltip": "实时显示麦克风输入电平。测量前请将耳机靠近麦克风并播放测试音，确认电平表有反应",
+        "audio_level_error": "无法打开麦克风: {error}",
+        "audio_level_clip": "注意爆音",
 
         # Plot Section
         "plot_group": "3. 测量波形与对齐可视化",

@@ -31,7 +31,7 @@ atexit.register(lambda: qInstallMessageHandler(None))
 from synctone.core.chirp import (
     ChirpAnalyzer, DelayEstimateResult, MultiMeasureResult, aggregate_measurements
 )
-from synctone.core.audio_io import AudioEngine, AudioDeviceInfo
+from synctone.core.audio_io import AudioEngine, AudioDeviceInfo, InputLevelMonitor
 from synctone.obs.client import ObsClient, ObsAudioSource, ObsVideoSource
 from synctone.gui.plot_widget import SyncPlotWidget
 from synctone.gui.verifier_window import SyncVerifierWindow
@@ -65,6 +65,7 @@ class MeasurementWorker(QThread):
     step_progress = Signal(int, int)  # (current_step, total_steps)
     finished_measurement = Signal(object, object)  # (MultiMeasureResult, recorded_signal)
     error_occurred = Signal(str)
+    level_peak = Signal(float)  # live mic peak during measurement
 
     def __init__(
         self,
@@ -95,6 +96,7 @@ class MeasurementWorker(QThread):
                         output_device_idx=self.out_device_idx,
                         input_device_idx=self.in_device_idx,
                         record_extra_seconds=0.4,
+                        level_callback=self.level_peak.emit,
                     )
                 except Exception:
                     # Fallback to device native sample rate (e.g. 44100 Hz) if 48000 Hz fails
@@ -111,6 +113,7 @@ class MeasurementWorker(QThread):
                         output_device_idx=self.out_device_idx,
                         input_device_idx=self.in_device_idx,
                         record_extra_seconds=0.4,
+                        level_callback=self.level_peak.emit,
                     )
 
                 res = self.analyzer.estimate_delay(recorded_signal=recorded)
@@ -161,6 +164,7 @@ class MainWindow(QMainWindow):
         self._init_ui()
         self._load_saved_settings()
         self._refresh_audio_devices()
+        self._start_level_monitor()
 
     def _apply_dark_theme(self) -> None:
         """Apply a sleek, modern dark theme stylesheet."""
@@ -449,6 +453,30 @@ class MainWindow(QMainWindow):
         vol_layout.addWidget(self.test_tone_btn)
         vol_layout.addWidget(self.refresh_devices_btn)
         dev_layout.addLayout(vol_layout, 2, 1)
+
+        # Live microphone input level meter (pre-measurement check)
+        self.level_icon = QLabel()
+        self.level_bar = QProgressBar()
+        self.level_bar.setRange(0, 100)
+        self.level_bar.setValue(0)
+        self.level_bar.setTextVisible(False)
+        self.level_bar.setFixedHeight(14)
+        self.level_bar.setMinimumHeight(14)
+        self.level_bar.setStyleSheet(self._level_bar_style("#00e676"))
+        self.level_label = QLabel("-- dB")
+        self.level_label.setFixedWidth(64)
+        self.level_label.setStyleSheet("color: #aaaabb; font-size: 11px;")
+        level_layout = QHBoxLayout()
+        level_layout.addWidget(self.level_icon)
+        level_layout.addWidget(self.level_bar, stretch=1)
+        level_layout.addWidget(self.level_label)
+        dev_layout.addLayout(level_layout, 3, 1)
+
+        self.level_monitor = InputLevelMonitor()
+        self._level_smoothed: float = 0.0
+        self._level_timer = QTimer(self)
+        self._level_timer.setInterval(50)
+        self._level_timer.timeout.connect(self._update_level_meter)
 
         top_layout.addWidget(self.device_box, stretch=5)
         main_layout.addLayout(top_layout, stretch=0)
@@ -775,6 +803,9 @@ class MainWindow(QMainWindow):
         self.test_tone_btn.setToolTip(t("audio_test_tooltip"))
         self.refresh_devices_btn.setText(t("audio_refresh"))
         self.refresh_devices_btn.setToolTip(t("audio_refresh_tooltip"))
+        self.level_icon.setText(t("audio_level"))
+        self.level_icon.setToolTip(t("audio_level_tooltip"))
+        self.level_bar.setToolTip(t("audio_level_tooltip"))
 
         # Group 3: Plot Widget
         self.plot_box.setTitle(t("plot_group"))
@@ -935,8 +966,62 @@ class MainWindow(QMainWindow):
         self.test_worker.start()
         self.status_bar.showMessage(t("status_test_tone_played"))
 
+    @staticmethod
+    def _level_bar_style(color: str) -> str:
+        return (
+            "QProgressBar { border: 1px solid #2a2a38; border-radius: 5px; background-color: #161620; min-height: 14px; }"
+            f"QProgressBar::chunk {{ background-color: {color}; border-radius: 4px; }}"
+        )
+
+    def _start_level_monitor(self) -> None:
+        # Skip opening real hardware in dummy/test mode
+        if os.environ.get("SYNCTONE_TEST_DUMMY_AUDIO", "0") == "1":
+            self._level_timer.start()
+            return
+        try:
+            self.level_monitor.start(self.combo_in_device.currentData())
+            self._level_timer.start()
+        except Exception as e:
+            # Meter is a convenience feature: fail silently (no popup) and show the reason as a tooltip
+            self._stop_level_monitor()
+            self.level_label.setText("N/A")
+            self.level_bar.setToolTip(t("audio_level_error", error=str(e)))
+
+    def _stop_level_monitor(self) -> None:
+        self._level_timer.stop()
+        self.level_monitor.stop()
+        self._level_smoothed = 0.0
+        self.level_bar.setValue(0)
+        self.level_label.setText("-- dB")
+        self.level_bar.setStyleSheet(self._level_bar_style("#00e676"))
+
+    def _update_level_meter(self) -> None:
+        """Poll peak level and update the meter (dB scale -60..0, fast attack / slow release)."""
+        peak = self.level_monitor.read_peak()
+        if peak > self._level_smoothed:
+            self._level_smoothed = peak
+        else:
+            self._level_smoothed *= 0.85
+        level = self._level_smoothed
+        db = 20.0 * np.log10(level) if level > 1e-6 else -120.0
+        self.level_bar.setValue(int(round(max(0.0, min(1.0, (db + 60.0) / 60.0)) * 100)))
+        if level >= 0.98:
+            color, text = "#ff5252", t("audio_level_clip")
+        elif level < 0.015:
+            color, text = "#ffca28", None
+        else:
+            color, text = "#00e676", None
+        self.level_bar.setStyleSheet(self._level_bar_style(color))
+        if text:
+            self.level_label.setText(text)
+        else:
+            self.level_label.setText(f"{db:.0f} dB" if db > -100.0 else "-- dB")
+
     def _on_device_selection_changed(self) -> None:
         self._save_settings()
+        # Restart live level meter on the newly selected input device (not while measuring)
+        if self.worker is None or not self.worker.isRunning():
+            self._start_level_monitor()
         if self.verifier_window is not None and self.verifier_window.isVisible():
             out_idx = self.combo_out_device.currentData()
             cur_src = self._get_selected_obs_source_name()
@@ -1238,6 +1323,12 @@ class MainWindow(QMainWindow):
         in_idx = self.combo_in_device.currentData()
         total_runs = int(self.combo_measure_mode.currentData() or 3)
 
+        # Release the mic stream so the measurement stream can use it exclusively;
+        # the live meter keeps running, fed by the measurement stream itself.
+        self.level_monitor.stop()
+        self._level_smoothed = 0.0
+        self._level_timer.start()
+
         self.measure_btn.setEnabled(False)
         self.measure_btn.setText(t("btn_measuring", current=1, total=total_runs))
         self.progress_bar.setRange(0, total_runs)
@@ -1254,7 +1345,12 @@ class MainWindow(QMainWindow):
         self.worker.step_progress.connect(self._on_step_progress)
         self.worker.finished_measurement.connect(self._on_measurement_finished)
         self.worker.error_occurred.connect(self._on_measurement_error)
+        self.worker.level_peak.connect(self.level_monitor.feed)
         self.worker.start()
+
+    def _end_measurement_level_meter(self) -> None:
+        """Resume always-on mic level monitoring after a measurement."""
+        self._start_level_monitor()
 
     def _on_step_progress(self, current: int, total: int) -> None:
         self.measure_btn.setText(t("btn_measuring", current=current, total=total))
@@ -1262,6 +1358,7 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(t("status_sampling", current=current, total=total))
 
     def _on_measurement_finished(self, multi: MultiMeasureResult, best_recorded: np.ndarray) -> None:
+        self._end_measurement_level_meter()
         self.measure_btn.setEnabled(True)
         self.measure_btn.setText(t("btn_start_measure"))
         self.progress_bar.setValue(self.progress_bar.maximum())
@@ -1306,6 +1403,7 @@ class MainWindow(QMainWindow):
 
 
     def _on_measurement_error(self, error_msg: str) -> None:
+        self._end_measurement_level_meter()
         self.measure_btn.setEnabled(True)
         self.measure_btn.setText(t("btn_start_measure"))
         self.progress_bar.setValue(0)
@@ -1612,6 +1710,8 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
 
     def closeEvent(self, event):
+        self._level_timer.stop()
+        self.level_monitor.stop()
         if self.test_worker is not None and self.test_worker.isRunning():
             self.test_worker.wait(1000)
         if self.worker is not None and self.worker.isRunning():

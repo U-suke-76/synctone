@@ -495,3 +495,32 @@ def test_device_refresh_and_audio_diagnostics(qapp):
 
 
 
+
+
+def test_input_level_meter(qapp):
+    """Live mic level meter: toggling, dB scaling, clipping color and release on stop."""
+    from synctone.gui.main_window import MainWindow
+    from synctone.i18n import t
+
+    win = MainWindow()
+    try:
+        # Always-on: meter runs right after startup without any toggle
+        assert win._level_timer.isActive()
+
+        # Moderate input (-20 dB) -> 2/3 of the bar
+        win.level_monitor._peak = 0.1
+        win._update_level_meter()
+        assert win.level_bar.value() == 67
+        assert "-20" in win.level_label.text()
+
+        # Clipping input -> full bar and warning text
+        win.level_monitor._peak = 1.0
+        win._update_level_meter()
+        assert win.level_bar.value() == 100
+        assert win.level_label.text() == t("audio_level_clip")
+
+        win._stop_level_monitor()
+        assert not win._level_timer.isActive()
+        assert win.level_bar.value() == 0
+    finally:
+        win.close()

@@ -162,3 +162,44 @@ def test_audio_engine_play_and_record_padding(monkeypatch):
     assert captured_play_shapes[0] == (72000, 2)
     assert len(rec) == 72000
 
+
+
+def test_audio_engine_play_and_record_level_callback(monkeypatch):
+    """With level_callback, play_and_record streams duplex audio and reports live input peaks."""
+    import threading
+    import numpy as np
+    import sounddevice as sd
+    from synctone.core.audio_io import AudioEngine
+
+    class FakeStream:
+        def __init__(self, samplerate, channels, dtype, device, callback, finished_callback):
+            self.callback = callback
+            self.finished_callback = finished_callback
+            self.channels = channels
+
+        def __enter__(self):
+            def run():
+                block = 256
+                try:
+                    while True:
+                        indata = np.full((block, 1), 0.25, dtype=np.float32)
+                        outdata = np.zeros((block, self.channels[1]), dtype=np.float32)
+                        self.callback(indata, outdata, block, None, None)
+                except sd.CallbackStop:
+                    pass
+                self.finished_callback()
+            threading.Thread(target=run).start()
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(sd, "Stream", FakeStream)
+    engine = AudioEngine(sample_rate=48000)
+    peaks = []
+    rec = engine.play_and_record(
+        np.zeros(1000, dtype=np.float32), 0, 1, record_extra_seconds=0.0, level_callback=peaks.append
+    )
+    assert len(rec) == 1000
+    assert peaks and max(peaks) == 0.25
+    assert np.allclose(rec, 0.25)
