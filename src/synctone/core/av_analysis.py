@@ -1,14 +1,27 @@
-"""Numerical AV sync analysis of a recording (beep onsets in audio, flash onsets in video).
+"""Numerical AV sync analysis of a recording using a sweeping-bar timecode and periodic beeps.
 
-This module is decoder-independent: it works on plain NumPy arrays (decoded audio samples and
-per-frame mean brightness with frame timestamps), so it can be unit-tested with synthetic data.
+Principle
+---------
+The app plays a beep exactly at app-clock phase 0 of every cycle (period ``P`` seconds) and draws a bar
+whose horizontal position encodes the app-clock phase at the instant each frame was rendered
+(left edge = phase 0, right edge = phase 1). In the recording:
 
-Sign convention: ``offset_ms = flash_time - beep_time``.
-A positive value means the video is LATER than the audio.
+* audio: beep ``i`` starts at ``a_i = c + i * P``                   (``c``: audio time of phase 0)
+* video: a frame with timestamp ``p`` shows phase ``phi``, so ``p = v + (n + phi) * P``
+                                                                    (``v``: video time of phase 0)
+
+``offset = v - c`` (wrapped to +-P/2) is then the audio/video offset of the recorded output. Because every
+frame carries its own sub-frame phase reading, there is no frame quantization error and the result does
+not depend on the tempo / frame-rate relationship.
+
+This module is decoder-independent: it works on plain NumPy arrays (audio samples, per-frame column
+brightness profiles and frame timestamps), so it can be unit-tested with synthetic data.
+
+Sign convention: ``offset_ms = v - c``. A positive value means the video is LATER than the audio.
 """
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 import numpy as np
 from scipy.signal import correlate, find_peaks, hilbert
 
@@ -17,14 +30,14 @@ from synctone.core.verifier_audio import generate_beep_sound
 
 @dataclass
 class AvOffsetResult:
-    """Estimated audio/video offset together with its reliability indicators."""
-    offset_ms: float  # flash_time - beep_time (positive: video later than audio)
-    uncertainty_ms: float  # heuristic error bound (quantization bias + statistical spread)
+    """Estimated audio/video offset together with fit-quality indicators."""
+    offset_ms: float  # v - c (positive: video later than audio), wrapped to +-period/2
+    uncertainty_ms: float  # half width of the range of offsets the data cannot tell apart
+    period_ms: float  # cycle length estimated from the beeps
+    audio_rms_ms: float  # beep timing residual of the linear fit
+    video_rms_ms: float  # bar position residual of the sawtooth fit, expressed in time
     n_beeps: int
-    n_flashes: int
-    n_matched: int
-    frame_interval_ms: float
-    phase_concentration: float  # 0..1; ~1 means beeps never dither against the frame grid (bad)
+    n_frames: int  # frames in which the bar was found and used
 
 
 def detect_beep_onsets(
@@ -88,110 +101,157 @@ def detect_beep_onsets(
     return np.asarray(times, dtype=np.float64)
 
 
-def detect_flash_onsets(
-    frame_times: np.ndarray,
-    brightness: np.ndarray,
-    min_contrast: float = 0.05,
-) -> np.ndarray:
-    """Detect flash onset times (seconds) from per-frame mean brightness.
+def fit_audio_clock(beep_times: np.ndarray) -> Tuple[float, float, float]:
+    """Fit ``a_i = c + i * P`` to the detected beep times.
 
-    The onset is the timestamp of the first frame whose brightness crosses the midpoint between
-    the baseline and the flash level (with hysteresis so a decaying flash is counted once).
+    Missed beeps are tolerated (indices are assigned by rounding to the nominal period).
+
+    Returns:
+        (period_s, phase_s, rms_s): cycle length, time of cycle phase 0 (offset of the first beep)
+        and the RMS residual of the fit.
+    """
+    a = np.sort(np.asarray(beep_times, dtype=np.float64).ravel())
+    if a.size < 3:
+        raise ValueError("At least 3 beeps are required to fit the audio clock.")
+    nominal = float(np.median(np.diff(a)))
+    idx = np.round((a - a[0]) / nominal)
+    slope, intercept = np.polyfit(idx, a, 1)
+    rms = float(np.sqrt(np.mean((a - (intercept + slope * idx)) ** 2)))
+    return float(slope), float(intercept), rms
+
+
+def bar_positions_from_profiles(profiles: np.ndarray, half_width_px: int = 8) -> np.ndarray:
+    """Locate the sweeping bar in each frame from its column brightness profile.
 
     Args:
-        frame_times: Presentation timestamp of each frame in seconds.
-        brightness: Mean brightness of each frame (any scale, e.g. 0..1).
-        min_contrast: Minimum (flash level - baseline) required, in the same unit as brightness.
+        profiles: Array (n_frames, width): brightness of each frame averaged over the rows of the
+            region that contains the timecode track.
+        half_width_px: Half width of the window used for the sub-pixel centroid.
+
+    Returns:
+        Array (n_frames,) of bar centre x positions in pixels (sub-pixel); NaN where no bar was found.
+        Static content (borders, text) is removed using the temporal median profile as background.
+    """
+    prof = np.asarray(profiles, dtype=np.float64)
+    if prof.ndim != 2 or prof.shape[0] == 0:
+        raise ValueError("profiles must be a non-empty 2D array (n_frames, width).")
+
+    diff = prof - np.median(prof, axis=0, keepdims=True)
+    diff[diff < 0.0] = 0.0
+    peaks = diff.max(axis=1)
+    ref = float(np.percentile(peaks, 90))
+    positions = np.full(prof.shape[0], np.nan, dtype=np.float64)
+    if ref <= 1e-9:
+        return positions
+
+    width = prof.shape[1]
+    cols = np.arange(width, dtype=np.float64)
+    for k in range(prof.shape[0]):
+        if peaks[k] < 0.3 * ref:
+            continue
+        c = int(np.argmax(diff[k]))
+        lo, hi = max(0, c - half_width_px), min(width, c + half_width_px + 1)
+        w = diff[k, lo:hi] - 0.2 * peaks[k]  # cut the noise floor around the bar
+        w[w < 0.0] = 0.0
+        total = w.sum()
+        if total > 0.0:
+            positions[k] = float((cols[lo:hi] * w).sum() / total)
+    return positions
+
+
+def fit_video_clock(
+    frame_times: np.ndarray,
+    bar_x: np.ndarray,
+    period_s: float,
+    step_s: float = 1e-4,
+) -> Tuple[float, float, float, int]:
+    """Fit the sawtooth bar motion ``x = A + B * frac((t - v) / P)`` to the frames.
+
+    Inside the sweep, ``A`` (track start) and ``v`` cannot be told apart, so ``v`` is pinned by the wrap
+    point where the bar jumps back to the start: for each candidate ``v`` the sweep is fitted by linear
+    regression and the candidates with the smallest residual (no frame on the wrong side of the wrap)
+    form a plateau. ``v`` is the middle of that plateau and its half width is the uncertainty.
+    The plateau is narrow only if the frame times are spread over the cycle (period and frame interval
+    not commensurate); otherwise the uncertainty grows up to about half a frame.
+
+    Args:
+        frame_times: Presentation timestamp of each frame (seconds).
+        bar_x: Bar x position of each frame in pixels (NaN where not found).
+        period_s: Cycle length (from the audio clock).
+        step_s: Resolution of the search over ``v``.
+
+    Returns:
+        (phase_s, uncertainty_s, rms_s, n_used): ``v`` (video time of phase 0, modulo the period),
+        its uncertainty, the RMS residual of the fit expressed in time, and the number of frames used.
     """
     t = np.asarray(frame_times, dtype=np.float64).ravel()
-    v = np.asarray(brightness, dtype=np.float64).ravel()
-    if t.size != v.size:
-        raise ValueError("frame_times and brightness must have the same length.")
-    if v.size < 3:
-        return np.array([], dtype=np.float64)
+    x = np.asarray(bar_x, dtype=np.float64).ravel()
+    if t.size != x.size:
+        raise ValueError("frame_times and bar_x must have the same length.")
+    ok = np.isfinite(x)
+    t, x = t[ok], x[ok]
+    if t.size < 10:
+        raise ValueError("Too few frames with a detected bar.")
+    if float(np.ptp(x)) < 1.0:
+        raise ValueError("The bar does not move: no timecode sweep detected.")
 
-    lo = float(np.percentile(v, 10))
-    hi = float(np.percentile(v, 99.5))
-    span = hi - lo
-    if span < min_contrast:
-        return np.array([], dtype=np.float64)
+    n = t.size
+    m = max(8, int(round(period_s / step_s)))
+    candidates = np.arange(m) * (period_s / m)
+    sxx = float(np.sum((x - x.mean()) ** 2))
+    xc = x - x.mean()
 
-    up = lo + 0.5 * span
-    rearm = lo + 0.3 * span
+    sse = np.empty(m, dtype=np.float64)
+    slope = np.empty(m, dtype=np.float64)
+    chunk = 400
+    for lo in range(0, m, chunk):
+        v = candidates[lo:lo + chunk, None]
+        phi = ((t[None, :] - v) / period_s) % 1.0
+        pc = phi - phi.mean(axis=1, keepdims=True)
+        spp = np.sum(pc * pc, axis=1)
+        spx = np.sum(pc * xc[None, :], axis=1)
+        b = spx / np.maximum(spp, 1e-12)
+        slope[lo:lo + chunk] = b
+        sse[lo:lo + chunk] = sxx - b * spx
 
-    onsets = []
-    armed = True
-    for k in range(v.size):
-        if armed and v[k] >= up:
-            armed = False
-            # A flash already in progress at the very first frame has an unknown onset: skip it
-            if k > 0:
-                onsets.append(t[k])
-        elif not armed and v[k] <= rearm:
-            armed = True
-    return np.asarray(onsets, dtype=np.float64)
+    best = int(np.argmin(sse))
+    plateau = sse <= sse[best] * 1.5 + 1.0  # a frame on the wrong side of the wrap costs ~B^2
+    left = right = best
+    while plateau[(left - 1) % m] and (best - left) < m - 1:
+        left -= 1
+    while plateau[(right + 1) % m] and (right - best) < m - 1 - (best - left):
+        right += 1
+    count = right - left + 1
+    mid = (left + right) / 2.0
+    v_est = float((mid % m) * (period_s / m))
+    uncertainty_s = float(count * (period_s / m) / 2.0)
+
+    mid_idx = int(round(mid)) % m
+    px_per_s = abs(float(slope[mid_idx])) / period_s
+    rms_px = float(np.sqrt(max(sse[mid_idx], 0.0) / n))
+    rms_s = rms_px / px_per_s if px_per_s > 0 else float("nan")
+    return v_est, uncertainty_s, rms_s, int(n)
 
 
 def estimate_av_offset(
     beep_times: np.ndarray,
-    flash_times: np.ndarray,
-    frame_interval_s: float,
-    max_match_s: Optional[float] = None,
+    frame_times: np.ndarray,
+    bar_x: np.ndarray,
 ) -> AvOffsetResult:
-    """Estimate the audio/video offset from detected beep and flash onsets.
+    """Estimate the audio/video offset of a recording from beep onsets and per-frame bar positions.
 
-    Each beep is paired with the nearest flash. A flash is detected at the first frame at or after
-    its true time, so on average it is observed half a frame late; this bias is removed. When the
-    beep period is not a multiple of the frame interval, the quantization error averages out over
-    the events. ``phase_concentration`` measures how well that dithering works.
-
-    The offset is only unambiguous within +-(beep period / 2).
-
-    Raises:
-        ValueError: If fewer than 2 beeps / no flashes were detected, or nothing could be matched.
+    The result is unambiguous within +-(period / 2). Use a beep period that is not a multiple of the frame
+    interval so that the frames sample the cycle densely (see :func:`fit_video_clock`).
     """
-    a = np.sort(np.asarray(beep_times, dtype=np.float64).ravel())
-    f = np.sort(np.asarray(flash_times, dtype=np.float64).ravel())
-    if a.size < 2 or f.size < 1:
-        raise ValueError("At least 2 beeps and 1 flash are required.")
-    if frame_interval_s <= 0:
-        raise ValueError("frame_interval_s must be positive.")
-
-    cycle = float(np.median(np.diff(a)))
-    limit = max_match_s if max_match_s is not None else cycle / 2.0
-
-    matched_a = []
-    deltas = []
-    for ai in a:
-        j = int(np.argmin(np.abs(f - ai)))
-        delta = float(f[j] - ai)
-        if abs(delta) <= limit:
-            matched_a.append(ai)
-            deltas.append(delta)
-    if not deltas:
-        raise ValueError("No beep could be matched with a flash.")
-
-    d = np.asarray(deltas, dtype=np.float64)
-    ma = np.asarray(matched_a, dtype=np.float64)
-
-    # Reject pairs that are clearly inconsistent (more than 1.5 frames from the median)
-    med = float(np.median(d))
-    keep = np.abs(d - med) <= 1.5 * frame_interval_s
-    d, ma = d[keep], ma[keep]
-
-    offset_s = float(np.mean(d)) - frame_interval_s / 2.0
-
-    phases = (ma / frame_interval_s) % 1.0
-    concentration = float(np.abs(np.mean(np.exp(2j * np.pi * phases))))
-    spread = float(np.std(d)) / np.sqrt(len(d)) if len(d) > 1 else frame_interval_s / 2.0
-    uncertainty_s = (frame_interval_s / 2.0) * concentration + spread
-
+    period, c, audio_rms = fit_audio_clock(beep_times)
+    v, video_unc, video_rms, n_used = fit_video_clock(frame_times, bar_x, period)
+    offset = ((v - c + period / 2.0) % period) - period / 2.0
     return AvOffsetResult(
-        offset_ms=offset_s * 1000.0,
-        uncertainty_ms=uncertainty_s * 1000.0,
-        n_beeps=int(a.size),
-        n_flashes=int(f.size),
-        n_matched=int(len(d)),
-        frame_interval_ms=frame_interval_s * 1000.0,
-        phase_concentration=concentration,
+        offset_ms=offset * 1000.0,
+        uncertainty_ms=(video_unc + audio_rms) * 1000.0,
+        period_ms=period * 1000.0,
+        audio_rms_ms=audio_rms * 1000.0,
+        video_rms_ms=video_rms * 1000.0,
+        n_beeps=int(np.asarray(beep_times).size),
+        n_frames=n_used,
     )

@@ -1,15 +1,17 @@
-"""Tests for the decoder-independent AV sync analysis (synthetic audio / frame brightness)."""
+"""Tests for the decoder-independent AV sync analysis (synthetic audio and bar profiles)."""
 
 import numpy as np
 import pytest
 
 from synctone.core.av_analysis import (
-    detect_beep_onsets, detect_flash_onsets, estimate_av_offset,
+    detect_beep_onsets, fit_audio_clock, bar_positions_from_profiles,
+    fit_video_clock, estimate_av_offset,
 )
 from synctone.core.verifier_audio import generate_beep_sound
 
 SR = 48000
 FPS = 60.0
+WIDTH = 1000
 
 
 def make_audio(beep_times, duration, gain=0.3, noise=0.01, seed=0):
@@ -22,22 +24,27 @@ def make_audio(beep_times, duration, gain=0.3, noise=0.01, seed=0):
     return audio
 
 
-def make_brightness(flash_times, duration, fps=FPS):
-    """Per-frame brightness: baseline 0.1, instant flash then exponential decay."""
-    times = np.arange(int(duration * fps)) / fps
-    v = np.full_like(times, 0.1)
-    for ft in flash_times:
-        after = times >= ft
-        v[after] = np.maximum(v[after], 0.1 + 0.8 * np.exp(-(times[after] - ft) / 0.05))
-    return times, v
+def make_profiles(frame_times, period, video_phase0, seed=1, with_static=True):
+    """Column profiles of frames showing a bar at x = WIDTH*frac((t - v)/P) (+ static clutter)."""
+    rng = np.random.default_rng(seed)
+    cols = np.arange(WIDTH, dtype=np.float64)
+    prof = np.full((len(frame_times), WIDTH), 20.0)
+    if with_static:
+        prof[:, 40:44] += 90.0   # window border
+        prof[:, 700:760] += 30.0  # static text
+    x = WIDTH * (((frame_times - video_phase0) / period) % 1.0)
+    prof += 200.0 * np.exp(-0.5 * ((cols[None, :] - x[:, None]) / 2.0) ** 2)
+    prof += rng.normal(0.0, 2.0, prof.shape)
+    return prof
 
 
-def beep_schedule(bpm, n, start=0.3):
-    return start + np.arange(n) * 60.0 / bpm
+def frame_clock(duration, seed=2, jitter_ms=0.2):
+    rng = np.random.default_rng(seed)
+    return np.arange(int(duration * FPS)) / FPS + rng.normal(0.0, jitter_ms / 1000.0, int(duration * FPS))
 
 
 def test_detect_beep_onsets_subms_accuracy():
-    truth = beep_schedule(110.4, 12)
+    truth = 0.3 + np.arange(12) * 0.5436
     audio = make_audio(truth, duration=8.0)
     found = detect_beep_onsets(audio, SR)
     assert len(found) == len(truth)
@@ -45,7 +52,7 @@ def test_detect_beep_onsets_subms_accuracy():
 
 
 def test_detect_beep_onsets_gain_and_inversion_invariant():
-    truth = beep_schedule(100, 6)
+    truth = 0.3 + np.arange(6) * 0.6
     audio = -make_audio(truth, duration=5.0, gain=0.05)
     found = detect_beep_onsets(audio, SR)
     assert len(found) == len(truth)
@@ -57,52 +64,82 @@ def test_detect_beep_onsets_silence_and_short_input():
     assert len(detect_beep_onsets(np.zeros(10), SR)) == 0
 
 
-def test_detect_flash_onsets_counts_each_flash_once():
-    truth = beep_schedule(110.4, 12)
-    times, v = make_brightness(truth, duration=8.0)
-    onsets = detect_flash_onsets(times, v)
-    assert len(onsets) == len(truth)
-    # Each onset is the first frame at/after the true flash time
-    assert np.all(onsets >= truth - 1e-9)
-    assert np.all(onsets - truth < 1.0 / FPS + 1e-9)
+def test_fit_audio_clock_tolerates_missed_beep():
+    truth = 0.3 + np.arange(10) * 0.5
+    kept = np.delete(truth, 4)
+    period, phase, rms = fit_audio_clock(kept)
+    assert period == pytest.approx(0.5, abs=1e-9)
+    assert phase == pytest.approx(0.3, abs=1e-9)
+    assert rms < 1e-9
 
 
-def test_detect_flash_onsets_flat_signal():
-    times = np.arange(100) / FPS
-    assert len(detect_flash_onsets(times, np.full(100, 0.3))) == 0
+def test_fit_audio_clock_needs_three_beeps():
+    with pytest.raises(ValueError):
+        fit_audio_clock(np.array([1.0, 1.5]))
 
 
-@pytest.mark.parametrize("true_offset_ms", [-30.0, 0.0, 23.0, 80.0])
-def test_estimate_av_offset_recovers_known_offset(true_offset_ms):
-    beeps = beep_schedule(110.4, 14)
-    audio = make_audio(beeps, duration=9.0)
-    times, v = make_brightness(beeps + true_offset_ms / 1000.0, duration=9.0)
+def test_bar_positions_ignore_static_clutter_and_are_subpixel():
+    times = frame_clock(5.0)
+    prof = make_profiles(times, period=0.5, video_phase0=0.0)
+    x = bar_positions_from_profiles(prof)
+    truth = WIDTH * ((times / 0.5) % 1.0)
+    ok = np.isfinite(x)
+    assert ok.mean() > 0.95
+    assert np.median(np.abs(x[ok] - truth[ok])) < 0.3  # sub-pixel
+
+
+@pytest.mark.parametrize("period", [60.0 / 110.4, 0.5436])  # not a multiple of the frame interval
+@pytest.mark.parametrize("true_offset_ms", [-45.0, 0.0, 37.0, 120.0])
+def test_estimate_av_offset_recovers_known_offset(period, true_offset_ms):
+    audio_phase = 0.31
+    beeps = audio_phase + np.arange(16) * period
+    audio = make_audio(beeps, duration=16 * period + 0.8)
+
+    times = frame_clock(8.0)
+    video_phase0 = audio_phase + true_offset_ms / 1000.0
+    prof = make_profiles(times, period, video_phase0)
 
     res = estimate_av_offset(
-        detect_beep_onsets(audio, SR), detect_flash_onsets(times, v), 1.0 / FPS
+        detect_beep_onsets(audio, SR), times, bar_positions_from_profiles(prof)
     )
-    assert res.n_matched >= 12
-    assert abs(res.offset_ms - true_offset_ms) < 4.0
-    assert res.phase_concentration < 0.5
-    # The reported uncertainty must actually cover the observed error
-    assert abs(res.offset_ms - true_offset_ms) <= res.uncertainty_ms + 1.0
+    assert res.period_ms == pytest.approx(period * 1000.0, abs=0.01)
+    assert abs(res.offset_ms - true_offset_ms) < 1.5
+    assert res.uncertainty_ms < 3.0
+    assert res.video_rms_ms < 2.0
 
 
-def test_estimate_av_offset_flags_commensurate_tempo():
-    """120 BPM at 60 fps is exactly 30 frames: no dithering, so reliability must be flagged."""
-    beeps = beep_schedule(120.0, 14)
-    audio = make_audio(beeps, duration=9.0)
-    times, v = make_brightness(beeps + 0.023, duration=9.0)
+@pytest.mark.parametrize("true_offset_ms", [-45.0, 37.0])
+def test_estimate_av_offset_commensurate_period_is_flagged_not_hidden(true_offset_ms):
+    """120 BPM at 60 fps is exactly 30 frames: the frames cannot pin the wrap point better than
+    about a frame, so the error may be large but the reported uncertainty must cover it."""
+    period = 0.5
+    audio_phase = 0.31
+    beeps = audio_phase + np.arange(16) * period
+    audio = make_audio(beeps, duration=16 * period + 0.8)
+    times = np.arange(int(8.0 * FPS)) / FPS  # exact frame grid, no jitter
+    prof = make_profiles(times, period, audio_phase + true_offset_ms / 1000.0)
 
     res = estimate_av_offset(
-        detect_beep_onsets(audio, SR), detect_flash_onsets(times, v), 1.0 / FPS
+        detect_beep_onsets(audio, SR), times, bar_positions_from_profiles(prof)
     )
-    assert res.phase_concentration > 0.95
-    assert res.uncertainty_ms > 7.0
+    assert res.uncertainty_ms > 5.0
+    assert abs(res.offset_ms - true_offset_ms) <= res.uncertainty_ms + 0.5
 
 
-def test_estimate_av_offset_requires_events():
+def test_estimate_av_offset_tolerates_missing_bar_frames():
+    period = 60.0 / 110.4
+    beeps = 0.2 + np.arange(14) * period
+    audio = make_audio(beeps, duration=14 * period + 0.8)
+    times = frame_clock(7.0)
+    prof = make_profiles(times, period, 0.2 + 0.03)
+    prof[::7] = 20.0  # frames where the bar is not visible
+    res = estimate_av_offset(
+        detect_beep_onsets(audio, SR), times, bar_positions_from_profiles(prof)
+    )
+    assert abs(res.offset_ms - 30.0) < 1.5
+
+
+def test_fit_video_clock_rejects_static_video():
+    times = frame_clock(3.0)
     with pytest.raises(ValueError):
-        estimate_av_offset(np.array([1.0]), np.array([1.0]), 1.0 / FPS)
-    with pytest.raises(ValueError):
-        estimate_av_offset(np.array([1.0, 2.0]), np.array([]), 1.0 / FPS)
+        fit_video_clock(times, np.full(len(times), 400.0), 0.5)
