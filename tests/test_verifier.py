@@ -214,3 +214,91 @@ def test_main_window_verifier_integration(qapp):
     main_win.close()
     main_win.deleteLater()
     qapp.processEvents()
+
+
+def test_clock_phase_follows_callback_history(monkeypatch):
+    """get_clock_phase() labels 'now' with sub-ms accuracy even when callbacks are bursty."""
+    from synctone.core import verifier_audio
+    from synctone.core.verifier_audio import SyncAudioPlayer
+
+    player = SyncAudioPlayer(sample_rate=48000, bpm=110.0, dummy_mode=True)
+    player._is_running = True
+    player._use_fallback = False
+    cycle_sec = player._cycle_samples / 48000.0
+    rate = 1.0 / cycle_sec
+
+    # Callbacks every ~10.7 ms with +-3 ms scheduling jitter; counter advances in whole blocks
+    rng = np.random.default_rng(0)
+    base = 1000.0
+    u0 = 0.37  # cycles
+    block_sec = 512 / 48000.0
+    for k in range(48):
+        ideal = base + k * block_sec
+        player._clock_hist.append((ideal + rng.uniform(-0.003, 0.003), u0 + rate * (k * block_sec + 0.05)))
+
+    now = base + 47 * block_sec + 0.004
+    monkeypatch.setattr(verifier_audio.time, "perf_counter", lambda: now)
+    expected = (u0 + rate * (47 * block_sec + 0.004 + 0.05)) % 1.0
+    got = player.get_clock_phase()
+    err_ms = abs((got - expected + 0.5) % 1.0 - 0.5) * cycle_sec * 1000.0
+    assert err_ms < 1.0
+
+
+def test_clock_phase_idle_and_fallback(monkeypatch):
+    from synctone.core import verifier_audio
+    from synctone.core.verifier_audio import SyncAudioPlayer
+
+    player = SyncAudioPlayer(sample_rate=48000, bpm=120.0, dummy_mode=True)
+    assert player.get_clock_phase() == 0.0  # not running
+
+    monkeypatch.setattr(verifier_audio.time, "perf_counter", lambda: 50.0)
+    player.start()  # dummy mode: wall-clock fallback, started at t=50.0
+    monkeypatch.setattr(verifier_audio.time, "perf_counter", lambda: 50.0 + 0.125)
+    assert player.get_clock_phase() == pytest.approx(0.25, abs=1e-6)  # 120 BPM: 0.5 s cycle
+    player.stop()
+
+
+def test_callback_records_clock_history():
+    from synctone.core.verifier_audio import SyncAudioPlayer
+
+    player = SyncAudioPlayer(sample_rate=48000, bpm=120.0, dummy_mode=True)
+    outdata = np.zeros((512, 2), dtype=np.float32)
+    for _ in range(5):
+        player._audio_callback(outdata, 512, None, None)
+    hist = list(player._clock_hist)
+    assert len(hist) == 5
+    cycles = [u for _, u in hist]
+    assert cycles == sorted(cycles)
+    assert cycles[-1] == pytest.approx(5 * 512 / player._cycle_samples)
+
+
+def test_analysis_mode_draws_bar_at_clock_phase(qapp):
+    """Analysis mode: black canvas with one white bar at margin + phase * track width."""
+    from synctone.gui.verifier_window import SyncVerifierWindow, SyncCanvas
+    from synctone.obs.client import ObsClient
+
+    win = SyncVerifierWindow(obs_client=ObsClient(), dummy_mode=True)
+    try:
+        win.show()
+        win.radio_analysis.setChecked(True)
+        assert win.canvas.analysis_mode
+        assert win.spin_bpm.value() == SyncVerifierWindow.ANALYSIS_BPM
+        assert not win.spin_bpm.isEnabled()
+
+        win.player._is_running = True
+        win.player.get_clock_phase = lambda: 0.5
+        img = win.canvas.grab().toImage()
+        y = img.height() // 2
+        xs = np.arange(img.width(), dtype=np.float64)
+        lum = np.array([img.pixelColor(int(x), y).red() for x in xs], dtype=np.float64)
+        centroid = float((xs * lum).sum() / lum.sum())
+        margin = SyncCanvas.ANALYSIS_MARGIN
+        expected = margin + 0.5 * (img.width() - 2 * margin)
+        assert abs(centroid - expected) < 1.0
+
+        win.radio_flash.setChecked(True)
+        assert not win.canvas.analysis_mode
+        assert win.spin_bpm.isEnabled()
+    finally:
+        win.player._is_running = False
+        win.close()

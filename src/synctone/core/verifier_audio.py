@@ -1,6 +1,7 @@
 """Audio tone generation and synchronized stream player for AV sync verification."""
 
 import time
+from collections import deque
 from typing import Optional
 import numpy as np
 import sounddevice as sd
@@ -87,6 +88,9 @@ class SyncAudioPlayer:
         # Lock-free atomic reference fields
         self._current_sample_in_cycle: int = 0
         self._cycle_samples: int = self._calc_cycle_samples()
+        # Unwrapped cycle position history (perf_counter time, cycles) used by get_clock_phase()
+        self._wraps: int = 0
+        self._clock_hist: deque = deque(maxlen=48)
         self._tone_samples: np.ndarray = self._prepare_tone()
 
         # Wall-clock timer fallback when hardware stream is unavailable
@@ -116,6 +120,7 @@ class SyncAudioPlayer:
     def set_bpm(self, bpm: float) -> None:
         """Update tempo (BPM). Smoothly adjusts cycle length without crackles."""
         self.bpm = max(40.0, min(240.0, float(bpm)))
+        self._clock_hist.clear()  # the cycle rate changes: restart the clock estimate
         old_cycle = self._cycle_samples
         new_cycle = self._calc_cycle_samples()
         if old_cycle > 0:
@@ -152,6 +157,8 @@ class SyncAudioPlayer:
             return
 
         self._current_sample_in_cycle = 0
+        self._wraps = 0
+        self._clock_hist.clear()
         self._tone_samples = self._prepare_tone()
         self._cycle_samples = self._calc_cycle_samples()
 
@@ -238,6 +245,32 @@ class SyncAudioPlayer:
         else:
             return rel - 1.0
 
+    def get_clock_phase(self) -> float:
+        """Get the precise app-clock cycle phase (0.0 <= phase < 1.0) at the current instant.
+
+        Phase 0.0 is the instant the tone is triggered. Unlike get_phase(), which only follows the
+        audio buffer position (updated in blocks), this estimates the continuous position by anchoring
+        the nominal sample rate to the recent callback times, so that a video frame rendered right now
+        can be labelled with sub-millisecond accuracy (used by the recording analysis timecode).
+        """
+        if not self._is_running:
+            return 0.0
+
+        now = time.perf_counter()
+        cycle_sec = self._cycle_samples / float(self.sample_rate)
+        if self._use_fallback:
+            return ((now - self._fallback_start_time) / cycle_sec) % 1.0
+
+        hist = list(self._clock_hist)
+        if len(hist) < 4:
+            return (self._current_sample_in_cycle % self._cycle_samples) / float(self._cycle_samples)
+
+        rate = 1.0 / cycle_sec  # cycles per second at the nominal sample rate
+        t0 = hist[0][0]
+        intercepts = [u - rate * (t - t0) for t, u in hist]
+        a = float(np.median(intercepts))
+        return (a + rate * (now - t0)) % 1.0
+
     def _audio_callback(self, outdata: np.ndarray, frames: int, time_info, status) -> None:
         """Real-time sounddevice output stream callback (strictly lock-free)."""
         cycle = self._cycle_samples
@@ -246,6 +279,7 @@ class SyncAudioPlayer:
 
         buf = np.zeros((frames, 2), dtype=np.float32)
         pos = self._current_sample_in_cycle
+        wraps = self._wraps
 
         for i in range(frames):
             if pos < tone_len:
@@ -256,6 +290,9 @@ class SyncAudioPlayer:
             pos += 1
             if pos >= cycle:
                 pos = 0
+                wraps += 1
 
         self._current_sample_in_cycle = pos
+        self._wraps = wraps
+        self._clock_hist.append((time.perf_counter(), wraps + pos / float(cycle)))
         outdata[:] = buf

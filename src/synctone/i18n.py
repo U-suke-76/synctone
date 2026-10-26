@@ -167,6 +167,8 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "verifier_obs_not_connected": "OBS未接続",
         "verifier_flash_hint": "バーが中央 (0 ms) に重なった瞬間に光と音が完全一致するか確認します",
         "verifier_click_hint": "クリック音がダブらず（タ・タンと割れず）1つの音として聴こえるか確認します",
+        "verifier_mode_analysis": "📐 録画解析用 (タイムコード)",
+        "verifier_analysis_hint": "録画解析用: 黒背景を流れる白いバーが各フレームの時刻を表します。OBSでこの画面を録画して解析します (テンポ固定)",
     },
 
     "en": {
@@ -324,6 +326,8 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "verifier_obs_not_connected": "OBS Disconnected",
         "verifier_flash_hint": "Verify that flash and beep trigger in perfect unison when the bar reaches center (0 ms)",
         "verifier_click_hint": "Listen to ensure the click sounds unified without flamming or doubling",
+        "verifier_mode_analysis": "📐 Recording Analysis (Timecode)",
+        "verifier_analysis_hint": "For recording analysis: the white bar on black encodes each frame's time. Record this window in OBS and analyze it (tempo fixed)",
     },
 
     "ko": {
@@ -481,6 +485,8 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "verifier_obs_not_connected": "OBS 미연결",
         "verifier_flash_hint": "바가 중앙(0 ms)을 지나는 순간 플래시와 비프음이 완벽히 일치하는지 확인하세요",
         "verifier_click_hint": "클릭음이 두 겹으로 갈라지지 않고 하나의 선명한 소리로 들리는지 확인하세요",
+        "verifier_mode_analysis": "📐 녹화 분석용 (타임코드)",
+        "verifier_analysis_hint": "녹화 분석용: 검은 배경 위를 흐르는 흰 막대가 각 프레임의 시각을 나타냅니다. OBS로 이 화면을 녹화해 분석합니다 (템포 고정)",
     },
 
     "zh_TW": {
@@ -638,6 +644,8 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "verifier_obs_not_connected": "OBS 未連線",
         "verifier_flash_hint": "檢視游標通過中央 (0 ms) 時，閃爍與嗶聲是否完美同步",
         "verifier_click_hint": "聆聽節拍音是否凝聚為單一清晰聲響，無雙重重音現象",
+        "verifier_mode_analysis": "📐 錄影分析用 (時間碼)",
+        "verifier_analysis_hint": "錄影分析用：黑色背景上移動的白色長條代表每一幀的時間。請用 OBS 錄下此視窗進行分析 (節奏固定)",
     },
 
     "zh_CN": {
@@ -795,6 +803,8 @@ TRANSLATIONS: Dict[str, Dict[str, str]] = {
         "verifier_obs_not_connected": "OBS 未连接",
         "verifier_flash_hint": "检查游标经过中央 (0 ms) 时，闪烁与哔声是否完全同步",
         "verifier_click_hint": "聆听节拍音是否融为单个清晰声音，无前后重音现象",
+        "verifier_mode_analysis": "📐 录像分析用 (时间码)",
+        "verifier_analysis_hint": "录像分析用：黑色背景上移动的白色条代表每一帧的时间。请用 OBS 录下此窗口进行分析 (节奏固定)",
     }
 }
 

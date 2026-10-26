@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QSlider, QSpinBox, QRadioButton, QButtonGroup, QFrame, QSizePolicy
 )
-from PySide6.QtCore import Qt, QTimer, QPoint
+from PySide6.QtCore import Qt, QTimer, QPoint, QRectF
 from PySide6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QKeyEvent
 
 from synctone.core.verifier_audio import SyncAudioPlayer
@@ -32,18 +32,29 @@ class SyncCanvas(QWidget):
         # Flash decay tracker
         self._flash_intensity: float = 0.0
 
+        # Recording-analysis timecode mode: a bar whose x position encodes the app-clock phase
+        self.analysis_mode: bool = False
+
     def stop_timer(self) -> None:
         """Stop the 60fps animation timer."""
         if self._timer.isActive():
             self._timer.stop()
 
     def paintEvent(self, event) -> None:
+        # Read the clock first so the bar is labelled with the instant this frame is rendered
+        analysis_phase = (
+            self.player.get_clock_phase() if (self.analysis_mode and self.player.is_running) else 0.0
+        )
         painter = QPainter(self)
         try:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
             w = self.width()
             h = self.height()
+
+            if self.analysis_mode:
+                self._draw_analysis_mode(painter, w, h, analysis_phase)
+                return
 
             # Background
             painter.fillRect(0, 0, w, h, QColor("#101016"))
@@ -66,6 +77,21 @@ class SyncCanvas(QWidget):
                 self._draw_click_mode(painter, w, h, phase, is_running)
         finally:
             painter.end()
+
+    # Horizontal margin of the analysis track (phase 0 at the left margin, phase 1 at the right one)
+    ANALYSIS_MARGIN = 40
+    ANALYSIS_BAR_WIDTH = 6.0
+
+    def _draw_analysis_mode(self, painter: QPainter, w: int, h: int, phase: float) -> None:
+        """Pure black canvas with a single white bar: easy to decode from a screen recording."""
+        painter.fillRect(0, 0, w, h, QColor("#000000"))
+        margin = self.ANALYSIS_MARGIN
+        track_w = max(1.0, float(w - 2 * margin))
+        x = margin + phase * track_w
+        y0 = h * 0.2
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor("#ffffff")))
+        painter.drawRect(QRectF(x - self.ANALYSIS_BAR_WIDTH / 2.0, y0, self.ANALYSIS_BAR_WIDTH, h * 0.6))
 
     def _draw_av_sync_mode(self, painter: QPainter, w: int, h: int, phase: float, is_running: bool) -> None:
         """Render the horizontal sweeper timeline with milliseconds scale and center flash."""
@@ -217,6 +243,9 @@ class SyncCanvas(QWidget):
 
 class SyncVerifierWindow(QDialog):
     """Independent verification window for real-time auditory & visual sync testing."""
+
+    # Tempo used by the recording-analysis mode (cycle = 32.7 frames at 60 fps, 16.4 at 30 fps)
+    ANALYSIS_BPM = 110
 
     def __init__(
         self,
@@ -371,9 +400,14 @@ class SyncVerifierWindow(QDialog):
         self.radio_click.toggled.connect(self._on_mode_toggled)
         row1.addWidget(self.radio_click)
 
+        self.radio_analysis = QRadioButton()
+        self.radio_analysis.toggled.connect(self._on_mode_toggled)
+        row1.addWidget(self.radio_analysis)
+
         self.mode_group = QButtonGroup(self)
         self.mode_group.addButton(self.radio_flash)
         self.mode_group.addButton(self.radio_click)
+        self.mode_group.addButton(self.radio_analysis)
 
         row1.addSpacing(10)
         self.label_mode_desc = QLabel()
@@ -452,6 +486,7 @@ class SyncVerifierWindow(QDialog):
         self.label_hint.setText(t("verifier_obs_hint"))
         self.radio_flash.setText(t("verifier_mode_flash"))
         self.radio_click.setText(t("verifier_mode_click"))
+        self.radio_analysis.setText(t("verifier_mode_analysis"))
         self.label_tempo.setText(t("verifier_tempo"))
         self.label_volume.setText(t("verifier_volume"))
         self.label_obs_trim_title.setText(t("verifier_obs_trim"))
@@ -473,6 +508,8 @@ class SyncVerifierWindow(QDialog):
     def _update_mode_description(self) -> None:
         if self.radio_flash.isChecked():
             self.label_mode_desc.setText(f"💡 {t('verifier_flash_hint')}")
+        elif self.radio_analysis.isChecked():
+            self.label_mode_desc.setText(f"💡 {t('verifier_analysis_hint')}")
         else:
             self.label_mode_desc.setText(f"💡 {t('verifier_click_hint')}")
 
@@ -499,8 +536,14 @@ class SyncVerifierWindow(QDialog):
         self._update_play_button_text()
 
     def _on_mode_toggled(self) -> None:
-        mode = "beep" if self.radio_flash.isChecked() else "click"
+        analysis = self.radio_analysis.isChecked()
+        mode = "click" if self.radio_click.isChecked() else "beep"
         self.player.set_mode(mode)
+        self.canvas.analysis_mode = analysis
+        if analysis:
+            # Fixed analysis tempo: not a multiple of common frame intervals so frames sample the cycle densely
+            self.spin_bpm.setValue(self.ANALYSIS_BPM)
+        self.spin_bpm.setEnabled(not analysis)
         self._update_mode_description()
 
     def _on_bpm_changed(self, value: int) -> None:
