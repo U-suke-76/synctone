@@ -6,6 +6,9 @@ binaries = []
 hiddenimports = []
 tmp_ret = collect_all('sounddevice')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+# PyAV (FFmpeg libraries) for decoding OBS recordings in the AV sync analysis
+tmp_ret = collect_all('av')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 excludes = [
