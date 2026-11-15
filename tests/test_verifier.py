@@ -24,14 +24,8 @@ def reset_language():
 
 
 def test_audio_sound_generators():
-    """Verify click and beep tone generators produce valid normalized signals."""
-    from synctone.core.verifier_audio import generate_click_sound, generate_beep_sound
-
-    click = generate_click_sound(sample_rate=48000, duration=0.035, freq=1200.0, amplitude=0.6)
-    assert isinstance(click, np.ndarray)
-    assert len(click) == int(48000 * 0.035)
-    assert not np.isnan(click).any()
-    assert np.max(np.abs(click)) <= 0.6 + 1e-4
+    """Verify beep tone generator produces valid normalized signals."""
+    from synctone.core.verifier_audio import generate_beep_sound
 
     beep = generate_beep_sound(sample_rate=48000, duration=0.04, freq=1760.0, amplitude=0.5)
     assert isinstance(beep, np.ndarray)
@@ -45,7 +39,7 @@ def test_sync_audio_player_logic():
     from synctone.core.verifier_audio import SyncAudioPlayer
 
     # Use dummy_mode=True to bypass hardware PortAudio in test suite
-    player = SyncAudioPlayer(sample_rate=48000, bpm=120.0, amplitude=0.5, mode="beep", dummy_mode=True)
+    player = SyncAudioPlayer(sample_rate=48000, bpm=120.0, amplitude=0.5, dummy_mode=True)
     assert player.bpm == 120.0
     assert player.amplitude == 0.5
     assert not player.is_running
@@ -61,12 +55,6 @@ def test_sync_audio_player_logic():
     # Volume update
     player.set_amplitude(0.8)
     assert player.amplitude == 0.8
-
-    # Mode update
-    player.set_mode("click")
-    assert player.mode == "click"
-    player.set_mode("beep")
-    assert player.mode == "beep"
 
     # Start playback (in dummy mode, uses wall-clock fallback)
     player.start()
@@ -104,8 +92,8 @@ def test_sync_canvas_render(qapp):
     event = QPaintEvent(QRect(0, 0, 600, 300))
     canvas.paintEvent(event)
 
-    # Active render in click mode
-    player.set_mode("click")
+    # Active render in analysis mode
+    canvas.analysis_mode = True
     canvas.paintEvent(event)
 
     player.stop()
@@ -152,11 +140,11 @@ def test_sync_verifier_window_interactions(qapp):
     assert not window.player.is_running
 
     # Mode switch
-    window.radio_click.setChecked(True)
-    assert window.player.mode == "click"
+    window.radio_analysis.setChecked(True)
+    assert window.canvas.analysis_mode
 
     window.radio_flash.setChecked(True)
-    assert window.player.mode == "beep"
+    assert not window.canvas.analysis_mode
 
     # Tempo spinbox change
     window.spin_bpm.setValue(100)
@@ -299,6 +287,12 @@ def test_analysis_mode_draws_bar_at_clock_phase(qapp):
         win.radio_flash.setChecked(True)
         assert not win.canvas.analysis_mode
         assert win.spin_bpm.isEnabled()
+
+        # Verify opening GameCaptureTargetWindow works without error
+        win.btn_game_capture.click()
+        assert win.game_capture_window is not None
+        assert win.game_capture_window.minimumSize().width() == 480
+        assert win.game_capture_window.minimumSize().height() == 220
     finally:
         win.player._is_running = False
         win.close()

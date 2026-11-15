@@ -21,8 +21,8 @@ An open-source OBS audio synchronization assistant designed for singing and musi
   Instantly applies detected delay (ms) to target OBS audio sources (Desktop Audio or Microphone) with a single click.
 * **Linked Video Render Delay for Karaoke, Rhythm Games & Webcams**  
   Synchronizes video sources (Game Capture, Capture Cards, Webcams) via OBS "Render Delay" filters alongside audio, eliminating early karaoke lyrics (flying text) and camera desync.
-* **Real-Time AV Sync Checker (Auditory & Visual Verification)**  
-  Verify sync results on the spot. Features two verification modes: "Visual Flash & Beep" (for window capture to check visual-audio alignment) and "Metronome Click" (for ear-based auditory check). Provides real-time ±1 ms / ±5 ms fine-tuning buttons directly linked to OBS.
+* **AV Sync Checker (Visual & Recording-Based Verification)**  
+  Verify and calibrate video-audio sync on the spot. Features two modes: "📺 Visual & Beep (AV Sync)" for real-time visual inspection, and "📐 Recording Analysis (Timecode)" which decodes a ~5-second OBS recording to measure video-vs-audio offset with ~1–2 ms precision and updates the video source's Render Delay automatically. Includes a dedicated Direct3D 11 target window so both OBS "Window Capture" and "Game Capture" sources can be calibrated directly.
 * **100% Local & Privacy-Conscious**  
   Zero telemetry or internet traffic. Audio recordings are analyzed strictly in memory and immediately discarded.
 
@@ -34,6 +34,7 @@ An open-source OBS audio synchronization assistant designed for singing and musi
 * **Waveform Visualization**: pyqtgraph (low-overhead, high-framerate plotting)
 * **Audio I/O**: sounddevice (PortAudio / Windows WASAPI)
 * **DSP / Analysis**: NumPy / SciPy (cross-correlation analysis & chirp generation)
+* **Recording Decode / AV Sync Analysis**: PyAV (FFmpeg-based video & audio decoding)
 * **OBS Integration**: obsws-python (WebSocket v5 protocol)
 
 ---
@@ -84,11 +85,11 @@ synctone
    * **If syncing karaoke lyrics screens or live camera feeds:**
      * Check `🎥 Link Render Delay to Video Source` and select your video source (Game Capture, Capture Card, etc.).
    * Click **"Apply Results to OBS"** (audio sync offset and video render delay will be applied immediately).
-7. **Verify with AV Sync Checker**  
-   * Click **"🎧 AV Sync Check"** to open the verification window.
-   * **Visual & Beep Mode**: Add this window as a "Window Capture" source in OBS. Verify that the flash and beep sound match precisely when the sweep bar hits center (0 ms).
-   * **Auditory Click Mode**: Listen to the metronome click via OBS Audio Monitoring to verify that both sound streams hit as a single unified beat without doubling or flamming.
-   * Fine-tune latency on the fly using the `±1 ms` and `±5 ms` buttons inside the verification window.
+7. **Verify & Auto-Calibrate Video Delay with AV Sync Checker**  
+   * Click **"🎧 AV Sync Check"** to open the verification window (if using OBS Game Capture, click **"🎮 Open Game Capture Window"** to open the dedicated Direct3D 11 target window).
+   * **📺 Visual & Beep Mode**: Capture the window in OBS and visually verify that the center flash and beep sound align when the sweep bar crosses `0 ms`.
+   * **📐 Recording Analysis (Timecode) Mode**: Record ~5 seconds in OBS while playing, then click **"📂 Analyze recording..."** and select the recorded file. SyncTone automatically calculates the exact video-vs-audio offset (ms) and lets you apply the correction directly to the OBS video source's Render Delay filter while preserving your calibrated audio sync offset.
+   * Fine-tune latency on the fly using the `±1 ms` and `±5 ms` buttons at the bottom of the verification window.
 
 ---
 

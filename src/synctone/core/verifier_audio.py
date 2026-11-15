@@ -7,32 +7,6 @@ import numpy as np
 import sounddevice as sd
 
 
-def generate_click_sound(
-    sample_rate: int = 48000,
-    duration: float = 0.035,
-    freq: float = 1200.0,
-    amplitude: float = 0.6,
-) -> np.ndarray:
-    """Generate a sharp woodblock-like click sound for auditory delay detection.
-    
-    Fast attack and exponential decay make delay differences (flam/double trigger)
-    instantly perceptible to human ears down to a few milliseconds.
-    """
-    n_samples = int(sample_rate * duration)
-    t = np.linspace(0, duration, n_samples, endpoint=False)
-    
-    # Fundamental + 2nd harmonic
-    tone = np.sin(2 * np.pi * freq * t) + 0.4 * np.sin(2 * np.pi * freq * 2.2 * t)
-    # Steep exponential decay envelope
-    envelope = np.exp(-t / (duration * 0.22))
-    raw = tone * envelope
-    peak = np.max(np.abs(raw))
-    if peak > 1e-6:
-        raw = raw / peak
-    sound = raw * amplitude
-    return sound.astype(np.float32)
-
-
 def generate_beep_sound(
     sample_rate: int = 48000,
     duration: float = 0.04,
@@ -40,21 +14,21 @@ def generate_beep_sound(
     amplitude: float = 0.6,
 ) -> np.ndarray:
     """Generate a clean high-frequency beep tone (A6 1760Hz) for visual flash AV sync.
-    
+
     Uses quick cosine ramp-in/out (2ms) to eliminate click transients while keeping
     sharp auditory attack timing.
     """
     n_samples = int(sample_rate * duration)
     t = np.linspace(0, duration, n_samples, endpoint=False)
     tone = np.sin(2 * np.pi * freq * t)
-    
+
     fade_len = int(sample_rate * 0.003)
     envelope = np.ones(n_samples, dtype=np.float32)
     if fade_len > 0 and 2 * fade_len < n_samples:
         fade_in = 0.5 * (1.0 - np.cos(np.linspace(0, np.pi, fade_len)))
         envelope[:fade_len] = fade_in
         envelope[-fade_len:] = fade_in[::-1]
-        
+
     raw = tone * envelope
     peak = np.max(np.abs(raw))
     if peak > 1e-6:
@@ -64,7 +38,7 @@ def generate_beep_sound(
 
 
 class SyncAudioPlayer:
-    """Synchronized lock-free audio stream player for metronome clicks and visual AV sync beeps."""
+    """Synchronized lock-free audio stream player for visual AV sync beeps."""
 
     def __init__(
         self,
@@ -72,14 +46,12 @@ class SyncAudioPlayer:
         bpm: float = 120.0,
         amplitude: float = 0.5,
         output_device_idx: Optional[int] = None,
-        mode: str = "beep",  # "beep" or "click"
         dummy_mode: bool = False,
     ):
         self.sample_rate = sample_rate
         self.bpm = max(40.0, min(240.0, float(bpm)))
         self.amplitude = max(0.05, min(1.0, float(amplitude)))
         self.output_device_idx = output_device_idx
-        self.mode = mode
         self.dummy_mode = dummy_mode
 
         self._is_running = False
@@ -102,20 +74,12 @@ class SyncAudioPlayer:
         return max(1, int(self.sample_rate * seconds_per_beat))
 
     def _prepare_tone(self) -> np.ndarray:
-        if self.mode == "click":
-            return generate_click_sound(
-                sample_rate=self.sample_rate,
-                duration=0.035,
-                freq=1200.0,
-                amplitude=self.amplitude,
-            )
-        else:
-            return generate_beep_sound(
-                sample_rate=self.sample_rate,
-                duration=0.04,
-                freq=1760.0,
-                amplitude=self.amplitude,
-            )
+        return generate_beep_sound(
+            sample_rate=self.sample_rate,
+            duration=0.04,
+            freq=1760.0,
+            amplitude=self.amplitude,
+        )
 
     def set_bpm(self, bpm: float) -> None:
         """Update tempo (BPM). Smoothly adjusts cycle length without crackles."""
@@ -131,11 +95,6 @@ class SyncAudioPlayer:
     def set_amplitude(self, amplitude: float) -> None:
         """Update volume level."""
         self.amplitude = max(0.05, min(1.0, float(amplitude)))
-        self._tone_samples = self._prepare_tone()
-
-    def set_mode(self, mode: str) -> None:
-        """Switch between 'beep' (AV Sync visual flash) and 'click' (auditory metronome)."""
-        self.mode = mode
         self._tone_samples = self._prepare_tone()
 
     def set_output_device(self, device_idx: Optional[int]) -> None:

@@ -13,6 +13,8 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 excludes = [
     # Qt6 unused components (SyncTone only uses QtWidgets, QtGui, QtCore, and basic pyqtgraph dependencies)
+    'PySide6.QtOpenGL',
+    'PySide6.QtOpenGLWidgets',
     'PySide6.QtQuick',
     'PySide6.QtQuickWidgets',
     'PySide6.QtQml',

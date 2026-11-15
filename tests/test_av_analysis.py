@@ -143,3 +143,35 @@ def test_fit_video_clock_rejects_static_video():
     times = frame_clock(3.0)
     with pytest.raises(ValueError):
         fit_video_clock(times, np.full(len(times), 400.0), 0.5)
+
+
+def test_estimate_av_offset_ignores_idle_frames_outside_beep_window():
+    """Frames before/after playback (where the bar is frozen) must not ruin the sweep fit."""
+    period = 60.0 / 110.0
+    audio_phase = 3.0
+    beeps = audio_phase + np.arange(14) * period  # playback from t=3.0s to t~10.6s
+    audio = make_audio(beeps, duration=14.0)
+    times = frame_clock(14.0)
+    prof = make_profiles(times, period, audio_phase + 0.035)
+    # Before t=3.0 and after last beep, the bar is stationary at x=200
+    idle = (times < 2.9) | (times > beeps[-1] + 0.1)
+    cols = np.arange(WIDTH, dtype=np.float64)
+    prof[idle] = 20.0 + 200.0 * np.exp(-0.5 * ((cols[None, :] - 200.0) / 2.0) ** 2)
+
+    res = estimate_av_offset(
+        detect_beep_onsets(audio, SR), times, bar_positions_from_profiles(prof)
+    )
+    assert abs(res.offset_ms - 35.0) < 2.0
+    assert res.uncertainty_ms < 5.0
+
+
+def test_estimate_av_offset_rejects_untracked_sweep():
+    """If the video does not show a sweeping bar (flat / random positions), raise ValueError."""
+    period = 60.0 / 110.0
+    beeps = 0.5 + np.arange(14) * period
+    times = frame_clock(9.0)
+    rng = np.random.default_rng(42)
+    bad_bar_x = rng.uniform(50.0, 900.0, size=len(times))
+    with pytest.raises(ValueError, match="uncertainty"):
+        estimate_av_offset(beeps, times, bad_bar_x)
+

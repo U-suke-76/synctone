@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QSpinBox, QDoubleSpinBox, QSlider, QProgressBar, QGroupBox, QMessageBox,
     QFrame, QStatusBar, QCheckBox, QSizePolicy
 )
-from PySide6.QtCore import Qt, QThread, Signal, QSettings, QTimer, qInstallMessageHandler, QtMsgType
+from PySide6.QtCore import Qt, QSettings, QTimer, qInstallMessageHandler, QtMsgType
 from PySide6.QtGui import QFont
 
 def _qt_message_handler(mode: QtMsgType, context, message: str) -> None:
@@ -28,107 +28,46 @@ def _qt_message_handler(mode: QtMsgType, context, message: str) -> None:
 qInstallMessageHandler(_qt_message_handler)
 atexit.register(lambda: qInstallMessageHandler(None))
 
-from synctone.core.chirp import (
-    ChirpAnalyzer, DelayEstimateResult, MultiMeasureResult, aggregate_measurements
-)
+from synctone.core.chirp import ChirpAnalyzer, MultiMeasureResult
 from synctone.core.audio_io import AudioEngine, AudioDeviceInfo, InputLevelMonitor
 from synctone.obs.client import ObsClient, ObsAudioSource, ObsVideoSource
 from synctone.gui.plot_widget import SyncPlotWidget
 from synctone.gui.verifier_window import SyncVerifierWindow
+from synctone.gui.workers import MeasurementWorker, TestToneWorker  # noqa: F401 (re-exported)
+from synctone.gui.styles import DARK_THEME_QSS, PANEL_FRAME_QSS, level_bar_style
 from synctone.i18n import t, LANGUAGES, I18nManager
-import sounddevice as sd
+
+# Keywords identifying sources that usually carry the backing track (desktop / output audio)
+_RECOMMENDED_SOURCE_KEYWORDS_CI = ("desktop",)
+_RECOMMENDED_SOURCE_KEYWORDS = ("オケ", "デスクトップ")
 
 
-class TestToneWorker(QThread):
-    """Worker thread to play a gentle test tone for volume checking."""
-    def __init__(self, out_device_idx: Optional[int], amplitude: float = 0.5):
-        super().__init__()
-        self.out_device_idx = out_device_idx
-        self.amplitude = amplitude
-
-    def run(self):
-        for sr in [48000, AudioEngine.get_device_default_samplerate(output_device_idx=self.out_device_idx, fallback=44100)]:
-            try:
-                # 0.25 second gentle sine tone (880 Hz, A5) with smooth envelope
-                t = np.linspace(0, 0.25, int(sr * 0.25), endpoint=False)
-                tone = np.sin(2 * np.pi * 880 * t) * self.amplitude * 0.5
-                fade = np.sin(np.linspace(0, np.pi, len(tone)))
-                stereo = np.column_stack([tone * fade, tone * fade]).astype(np.float32)
-                sd.play(stereo, samplerate=sr, device=self.out_device_idx, blocking=True)
-                break
-            except Exception:
-                continue
+def _is_recommended_obs_source(src: ObsAudioSource) -> bool:
+    """Return True if the OBS audio source looks like the desktop/backing-track output."""
+    if "output" in src.kind.lower():
+        return True
+    if any(k in src.name.lower() for k in _RECOMMENDED_SOURCE_KEYWORDS_CI):
+        return True
+    return any(k in src.name for k in _RECOMMENDED_SOURCE_KEYWORDS)
 
 
-class MeasurementWorker(QThread):
-    """Worker thread to run single or multi-run measurement and analysis."""
-    step_progress = Signal(int, int)  # (current_step, total_steps)
-    finished_measurement = Signal(object, object)  # (MultiMeasureResult, recorded_signal)
-    error_occurred = Signal(str)
-    level_peak = Signal(float)  # live mic peak during measurement
+def _format_obs_audio_label(src: ObsAudioSource) -> str:
+    """Combo box label for an OBS audio source, e.g. 'Desktop [120 ms] (recommended)'."""
+    label = f"{src.name} [{src.sync_offset_ms} ms]"
+    if _is_recommended_obs_source(src):
+        label += f" {t('obs_recommended_source')}"
+    return label
 
-    def __init__(
-        self,
-        analyzer: ChirpAnalyzer,
-        audio_engine: AudioEngine,
-        out_device_idx: Optional[int],
-        in_device_idx: Optional[int],
-        total_runs: int = 3,
-    ):
-        super().__init__()
-        self.analyzer = analyzer
-        self.audio_engine = audio_engine
-        self.out_device_idx = out_device_idx
-        self.in_device_idx = in_device_idx
-        self.total_runs = total_runs
 
-    def run(self):
-        try:
-            results: List[DelayEstimateResult] = []
-            recordeds: List[np.ndarray] = []
+def _format_obs_video_label(src: ObsVideoSource) -> str:
+    """Combo box label for an OBS video source, e.g. 'Camera [80 ms]'."""
+    return f"{src.name} [{src.render_delay_ms} ms]"
 
-            for run_idx in range(self.total_runs):
-                self.step_progress.emit(run_idx + 1, self.total_runs)
-                ref_sig = self.analyzer.reference_signal
-                try:
-                    recorded = self.audio_engine.play_and_record(
-                        playback_data=ref_sig,
-                        output_device_idx=self.out_device_idx,
-                        input_device_idx=self.in_device_idx,
-                        record_extra_seconds=0.4,
-                        level_callback=self.level_peak.emit,
-                    )
-                except Exception:
-                    # Fallback to device native sample rate (e.g. 44100 Hz) if 48000 Hz fails
-                    alt_sr = AudioEngine.get_device_default_samplerate(
-                        output_device_idx=self.out_device_idx,
-                        input_device_idx=self.in_device_idx,
-                        fallback=44100,
-                    )
-                    self.audio_engine.set_sample_rate(alt_sr)
-                    self.analyzer.set_sample_rate(alt_sr)
-                    ref_sig = self.analyzer.reference_signal
-                    recorded = self.audio_engine.play_and_record(
-                        playback_data=ref_sig,
-                        output_device_idx=self.out_device_idx,
-                        input_device_idx=self.in_device_idx,
-                        record_extra_seconds=0.4,
-                        level_callback=self.level_peak.emit,
-                    )
 
-                res = self.analyzer.estimate_delay(recorded_signal=recorded)
-                results.append(res)
-                recordeds.append(recorded)
-
-                if run_idx < self.total_runs - 1:
-                    self.msleep(250)  # Pause between sweeps
-
-            multi_result = aggregate_measurements(results)
-            best_recorded = recordeds[multi_result.best_index]
-            self.finished_measurement.emit(multi_result, best_recorded)
-        except Exception as e:
-            self.error_occurred.emit(str(e))
-
+def _set_combo_item_label(combo: QComboBox, idx: int, label: str) -> None:
+    """Update both the visible text and tooltip of a combo box item."""
+    combo.setItemText(idx, label)
+    combo.setItemData(idx, label, Qt.ItemDataRole.ToolTipRole)
 
 
 class MainWindow(QMainWindow):
@@ -168,177 +107,7 @@ class MainWindow(QMainWindow):
 
     def _apply_dark_theme(self) -> None:
         """Apply a sleek, modern dark theme stylesheet."""
-        self.setStyleSheet("""
-            QMainWindow, QWidget {
-                background-color: #121218;
-                color: #e0e0e0;
-                font-family: 'Segoe UI', 'Meiryo', sans-serif;
-                font-size: 10pt;
-            }
-            QGroupBox {
-                border: 1px solid #2a2a38;
-                border-radius: 8px;
-                margin-top: 8px;
-                padding-top: 12px;
-                font-weight: bold;
-                color: #82aaff;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 0 8px;
-            }
-
-            QPushButton {
-                background-color: #1e1e2c;
-                border: 1px solid #3d3d52;
-                border-radius: 6px;
-                padding: 6px 14px;
-                color: #ffffff;
-                font-weight: 500;
-            }
-            QPushButton:hover {
-                background-color: #2b2b3f;
-                border-color: #5c5c7a;
-            }
-            QPushButton:pressed {
-                background-color: #161622;
-            }
-            QPushButton:checked {
-                background-color: #283593;
-                border-color: #5c6bc0;
-                color: #ffffff;
-                font-weight: bold;
-            }
-            QPushButton:disabled {
-                background-color: #14141c;
-                color: #555566;
-                border-color: #22222e;
-            }
-            QPushButton#measure_btn {
-                background-color: #00897b;
-                border: 1px solid #26a69a;
-                font-size: 14px;
-                font-weight: bold;
-                padding: 8px 12px;
-                border-radius: 8px;
-            }
-            QPushButton#measure_btn:hover {
-                background-color: #009688;
-                border-color: #4db6ac;
-            }
-            QPushButton#apply_btn {
-                background-color: #1976d2;
-                border: 1px solid #42a5f5;
-                font-size: 14px;
-                font-weight: bold;
-                padding: 8px 18px;
-                border-radius: 6px;
-            }
-            QPushButton#apply_btn:hover {
-                background-color: #2196f3;
-                border-color: #64b5f6;
-            }
-            QPushButton#verifier_btn {
-                background-color: #3949ab;
-                border: 1px solid #5c6bc0;
-                font-size: 13px;
-                font-weight: bold;
-                padding: 10px 16px;
-                border-radius: 8px;
-            }
-            QPushButton#verifier_btn:hover {
-                background-color: #3f51b5;
-                border-color: #7986cb;
-            }
-            QComboBox, QLineEdit {
-                background-color: #1a1a24;
-                border: 1px solid #333344;
-                border-radius: 5px;
-                padding: 5px 8px;
-                color: #ffffff;
-            }
-            QComboBox:focus, QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
-                border: 1px solid #82aaff;
-            }
-            QSpinBox, QDoubleSpinBox {
-                background-color: #1a1a24;
-                border: 1px solid #333344;
-                border-radius: 5px;
-                padding: 4px 22px 4px 8px;
-                color: #ffffff;
-                font-weight: bold;
-            }
-            QSpinBox::up-button, QDoubleSpinBox::up-button {
-                subcontrol-origin: border;
-                subcontrol-position: top right;
-                width: 18px;
-                background-color: #2b2b3f;
-                border-left: 1px solid #333344;
-                border-bottom: 1px solid #333344;
-                border-top-right-radius: 4px;
-            }
-            QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover {
-                background-color: #3d3d5a;
-            }
-            QSpinBox::up-button:pressed, QDoubleSpinBox::up-button:pressed {
-                background-color: #1a1a24;
-            }
-            QSpinBox::down-button, QDoubleSpinBox::down-button {
-                subcontrol-origin: border;
-                subcontrol-position: bottom right;
-                width: 18px;
-                background-color: #2b2b3f;
-                border-left: 1px solid #333344;
-                border-bottom-right-radius: 4px;
-            }
-            QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
-                background-color: #3d3d5a;
-            }
-            QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed {
-                background-color: #1a1a24;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 20px;
-            }
-            QProgressBar {
-                border: 1px solid #2a2a38;
-                border-radius: 6px;
-                text-align: center;
-                background-color: #161620;
-                min-height: 28px;
-                font-weight: bold;
-                color: #ffffff;
-                font-size: 11px;
-            }
-            QProgressBar::chunk {
-                background-color: #00b0ff;
-                border-radius: 5px;
-            }
-            QSlider::groove:horizontal {
-                border: 1px solid #2a2a38;
-                height: 6px;
-                background: #1a1a24;
-                border-radius: 3px;
-            }
-            QSlider::sub-page:horizontal {
-                background: #82aaff;
-                border-radius: 3px;
-            }
-            QSlider::handle:horizontal {
-                background: #ffffff;
-                border: 1px solid #82aaff;
-                width: 16px;
-                margin-top: -5px;
-                margin-bottom: -5px;
-                border-radius: 8px;
-            }
-            QStatusBar {
-                background-color: #0d0d12;
-                color: #888899;
-            }
-        """)
+        self.setStyleSheet(DARK_THEME_QSS)
 
     def _init_ui(self) -> None:
         central_widget = QWidget(self)
@@ -348,6 +117,31 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(6)
 
         # 0. Header bar: Language selector
+        main_layout.addLayout(self._build_header_bar())
+
+        # 1. Top Section: OBS Connection & Audio Device Configuration (Side-by-side)
+        top_layout = QHBoxLayout()
+        top_layout.setSpacing(10)
+        top_layout.addWidget(self._build_obs_box(), stretch=3)
+        top_layout.addWidget(self._build_device_box(), stretch=5)
+        main_layout.addLayout(top_layout, stretch=0)
+
+        # 2. Middle Section: Plots (Waveform and Cross-Correlation) - Give maximum vertical expansion!
+        main_layout.addWidget(self._build_plot_box(), stretch=10)
+
+        # 3. Bottom Section: Measurement & OBS Application Panel
+        main_layout.addWidget(self._build_bottom_box(), stretch=0)
+
+        # Status Bar
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+
+        # Initial translation
+        self.retranslate_ui()
+        self.status_bar.showMessage(t("status_ready"))
+
+    def _build_header_bar(self) -> QHBoxLayout:
+        """Header bar with the language selector."""
         header_bar = QHBoxLayout()
         header_bar.setContentsMargins(0, 0, 0, 0)
         header_bar.addStretch()
@@ -364,13 +158,10 @@ class MainWindow(QMainWindow):
                 break
         self.combo_language.currentIndexChanged.connect(self._on_language_changed)
         header_bar.addWidget(self.combo_language)
-        main_layout.addLayout(header_bar)
+        return header_bar
 
-        # 1. Top Section: OBS Connection & Audio Device Configuration (Side-by-side)
-        top_layout = QHBoxLayout()
-        top_layout.setSpacing(10)
-
-        # 1-A. OBS Connection Box
+    def _build_obs_box(self) -> QGroupBox:
+        """1-A. OBS Connection Box."""
         self.obs_box = QGroupBox()
         self.obs_box.setMinimumWidth(310)
         obs_layout = QGridLayout(self.obs_box)
@@ -406,10 +197,10 @@ class MainWindow(QMainWindow):
         btn_status_layout.addWidget(self.obs_connect_btn)
         btn_status_layout.addWidget(self.obs_status_label)
         obs_layout.addLayout(btn_status_layout, 2, 0, 1, 2)
+        return self.obs_box
 
-        top_layout.addWidget(self.obs_box, stretch=3)
-
-        # 1-B. Audio Hardware Device Selection & Volume Box
+    def _build_device_box(self) -> QGroupBox:
+        """1-B. Audio Hardware Device Selection & Volume Box (with live input level meter)."""
         self.device_box = QGroupBox()
         dev_layout = QGridLayout(self.device_box)
         dev_layout.setContentsMargins(10, 8, 10, 8)
@@ -477,11 +268,10 @@ class MainWindow(QMainWindow):
         self._level_timer = QTimer(self)
         self._level_timer.setInterval(50)
         self._level_timer.timeout.connect(self._update_level_meter)
+        return self.device_box
 
-        top_layout.addWidget(self.device_box, stretch=5)
-        main_layout.addLayout(top_layout, stretch=0)
-
-        # 2. Middle Section: Plots (Waveform and Cross-Correlation) - Give maximum vertical expansion!
+    def _build_plot_box(self) -> QGroupBox:
+        """2. Waveform / cross-correlation plot area."""
         self.plot_box = QGroupBox()
         self.plot_box.setMinimumHeight(390)
         self.plot_box.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -491,15 +281,29 @@ class MainWindow(QMainWindow):
         self.plot_widget.setMinimumHeight(360)
         self.plot_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         plot_layout.addWidget(self.plot_widget)
-        main_layout.addWidget(self.plot_box, stretch=10)
+        return self.plot_box
 
-        # 3. Bottom Section: Measurement & OBS Application Panel
+    def _build_bottom_box(self) -> QGroupBox:
+        """3. Measurement controls, results, manual adjustment and OBS apply panel."""
         self.bottom_box = QGroupBox()
         bottom_layout = QVBoxLayout(self.bottom_box)
         bottom_layout.setContentsMargins(10, 8, 10, 8)
         bottom_layout.setSpacing(8)
 
-        # Top row: Measure button, mode selection, progress bar
+        bottom_layout.addLayout(self._build_measure_row())
+
+        # Results and Adjustment Row
+        result_row = QHBoxLayout()
+        result_row.setSpacing(10)
+        result_row.addWidget(self._build_result_frame(), stretch=3)
+        result_row.addWidget(self._build_adjust_frame(), stretch=4)
+        # OBS Target and Apply - Widest stretch to accommodate long source names
+        result_row.addWidget(self._build_apply_frame(), stretch=5)
+        bottom_layout.addLayout(result_row)
+        return self.bottom_box
+
+    def _build_measure_row(self) -> QHBoxLayout:
+        """Measure button, mode selection, progress bar and verifier button."""
         measure_row = QHBoxLayout()
         measure_row.setSpacing(10)
 
@@ -526,16 +330,12 @@ class MainWindow(QMainWindow):
         self.btn_open_verifier.setObjectName("verifier_btn")
         self.btn_open_verifier.clicked.connect(self._open_verifier_window)
         measure_row.addWidget(self.btn_open_verifier)
+        return measure_row
 
-        bottom_layout.addLayout(measure_row)
-
-        # Results and Adjustment Row
-        result_row = QHBoxLayout()
-        result_row.setSpacing(10)
-
-        # Result badge (Median + Runs history + Jitter)
+    def _build_result_frame(self) -> QFrame:
+        """Result badge (Median + Runs history + Jitter)."""
         res_frame = QFrame()
-        res_frame.setStyleSheet("background-color: #1a1a26; border-radius: 6px; padding: 4px;")
+        res_frame.setStyleSheet(PANEL_FRAME_QSS)
         res_layout = QVBoxLayout(res_frame)
         res_layout.setContentsMargins(8, 6, 8, 6)
         res_layout.setSpacing(5)
@@ -556,11 +356,12 @@ class MainWindow(QMainWindow):
         res_layout.addWidget(self.runs_label)
         res_layout.addWidget(self.jitter_badge)
         res_layout.addStretch()
-        result_row.addWidget(res_frame, stretch=3)
+        return res_frame
 
-        # Manual Adjustment Controls - 2-tier button layout to eliminate horizontal crowding
+    def _build_adjust_frame(self) -> QFrame:
+        """Manual Adjustment Controls - 2-tier button layout to eliminate horizontal crowding."""
         adj_frame = QFrame()
-        adj_frame.setStyleSheet("background-color: #1a1a26; border-radius: 6px; padding: 4px;")
+        adj_frame.setStyleSheet(PANEL_FRAME_QSS)
         adj_layout = QVBoxLayout(adj_frame)
         adj_layout.setContentsMargins(8, 6, 8, 6)
         adj_layout.setSpacing(5)
@@ -672,11 +473,12 @@ class MainWindow(QMainWindow):
         self.slider_offset.valueChanged.connect(self._on_slider_changed)
         adj_layout.addWidget(self.slider_offset)
         adj_layout.addStretch()
-        result_row.addWidget(adj_frame, stretch=4)
+        return adj_frame
 
-        # OBS Target and Apply - Widest stretch to accommodate long source names
+    def _build_apply_frame(self) -> QFrame:
+        """OBS target source selection (audio + optional video) and apply button."""
         apply_frame = QFrame()
-        apply_frame.setStyleSheet("background-color: #1a1a26; border-radius: 6px; padding: 4px;")
+        apply_frame.setStyleSheet(PANEL_FRAME_QSS)
         apply_layout = QVBoxLayout(apply_frame)
         apply_layout.setContentsMargins(8, 6, 8, 6)
         apply_layout.setSpacing(5)
@@ -751,18 +553,7 @@ class MainWindow(QMainWindow):
         self.apply_btn.setMinimumHeight(32)
         self.apply_btn.clicked.connect(self._apply_offset_to_obs)
         apply_layout.addWidget(self.apply_btn)
-
-        result_row.addWidget(apply_frame, stretch=5)
-        bottom_layout.addLayout(result_row)
-        main_layout.addWidget(self.bottom_box, stretch=0)
-
-        # Status Bar
-        self.status_bar = QStatusBar()
-        self.setStatusBar(self.status_bar)
-
-        # Initial translation
-        self.retranslate_ui()
-        self.status_bar.showMessage(t("status_ready"))
+        return apply_frame
 
 
     def _on_language_changed(self, index: int) -> None:
@@ -968,10 +759,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _level_bar_style(color: str) -> str:
-        return (
-            "QProgressBar { border: 1px solid #2a2a38; border-radius: 5px; background-color: #161620; min-height: 14px; }"
-            f"QProgressBar::chunk {{ background-color: {color}; border-radius: 4px; }}"
-        )
+        return level_bar_style(color)
 
     def _start_level_monitor(self) -> None:
         # Skip opening real hardware in dummy/test mode
@@ -1022,10 +810,7 @@ class MainWindow(QMainWindow):
         # Restart live level meter on the newly selected input device (not while measuring)
         if self.worker is None or not self.worker.isRunning():
             self._start_level_monitor()
-        if self.verifier_window is not None and self.verifier_window.isVisible():
-            out_idx = self.combo_out_device.currentData()
-            cur_src = self._get_selected_obs_source_name()
-            self.verifier_window.update_device_and_source(out_idx, cur_src)
+        self._sync_verifier_targets()
 
     # --- Device Management ---
     def _refresh_audio_devices(self) -> None:
@@ -1167,9 +952,7 @@ class MainWindow(QMainWindow):
         self.current_video_delay_label.setText(t("current_video_delay_none"))
         self._latest_obs_video_delay = None
         self.obs_video_sources.clear()
-        if self.verifier_window is not None and self.verifier_window.isVisible():
-            out_idx = self.combo_out_device.currentData()
-            self.verifier_window.update_device_and_source(out_idx, None)
+        self._sync_verifier_targets()
 
     def _reload_obs_sources(self) -> None:
         self.combo_obs_source.clear()
@@ -1191,9 +974,8 @@ class MainWindow(QMainWindow):
 
                 recommended_idx = 0
                 for idx, src in enumerate(self.obs_sources):
-                    label = f"{src.name} [{src.sync_offset_ms} ms]"
-                    if "output" in src.kind.lower() or "desktop" in src.name.lower() or "オケ" in src.name or "デスクトップ" in src.name:
-                        label += f" {t('obs_recommended_source')}"
+                    label = _format_obs_audio_label(src)
+                    if _is_recommended_obs_source(src):
                         recommended_idx = idx
                     self.combo_obs_source.addItem(label, src)
                     self.combo_obs_source.setItemData(idx, label, Qt.ItemDataRole.ToolTipRole)
@@ -1210,7 +992,7 @@ class MainWindow(QMainWindow):
                 else:
                     self.combo_obs_video_source.setEnabled(True)
                     for v_idx, v_src in enumerate(self.obs_video_sources):
-                        v_label = f"{v_src.name} [{v_src.render_delay_ms} ms]"
+                        v_label = _format_obs_video_label(v_src)
                         self.combo_obs_video_source.addItem(v_label, v_src)
                         self.combo_obs_video_source.setItemData(v_idx, v_label, Qt.ItemDataRole.ToolTipRole)
                     self.combo_obs_video_source.setCurrentIndex(0)
@@ -1235,16 +1017,14 @@ class MainWindow(QMainWindow):
         else:
             self._latest_obs_video_delay = None
             self.current_video_delay_label.setText(t("current_video_delay_none"))
+        self._sync_verifier_targets()
 
     def _fetch_current_obs_offset(self) -> None:
         """Fetch real-time sync offset from OBS for the currently selected audio source and apply to preview."""
         if not self.obs_client.is_connected:
             return
-        idx = self.combo_obs_source.currentIndex()
-        if idx < 0 or not self.obs_sources:
-            return
-        src = self.combo_obs_source.itemData(idx)
-        if not isinstance(src, ObsAudioSource):
+        src = self._selected_obs_audio_source()
+        if src is None:
             return
 
         try:
@@ -1253,11 +1033,7 @@ class MainWindow(QMainWindow):
             self._latest_obs_offset = latest_offset
 
             # Update combo text
-            label = f"{src.name} [{latest_offset} ms]"
-            if "output" in src.kind.lower() or "desktop" in src.name.lower() or "オケ" in src.name or "デスクトップ" in src.name:
-                label += f" {t('obs_recommended_source')}"
-            self.combo_obs_source.setItemText(idx, label)
-            self.combo_obs_source.setItemData(idx, label, Qt.ItemDataRole.ToolTipRole)
+            self._refresh_selected_audio_label(src)
             self.current_offset_label.setText(t("current_obs_val", offset=latest_offset))
 
             # Update button in manual adjustment row
@@ -1277,17 +1053,20 @@ class MainWindow(QMainWindow):
         if not self.obs_client.is_connected:
             self.diff_offset_label.setText("")
             return
-        idx = self.combo_obs_source.currentIndex()
-        if idx < 0 or not self.obs_sources:
-            self.diff_offset_label.setText("")
-            return
-        src = self.combo_obs_source.itemData(idx)
-        if not isinstance(src, ObsAudioSource):
+        src = self._selected_obs_audio_source()
+        if src is None:
             self.diff_offset_label.setText("")
             return
 
         current_ms = float(src.sync_offset_ms)
-        target_ms = round(float(self.spin_offset.value()), 1)
+        spin_ms = round(float(self.spin_offset.value()), 1)
+        # If the spinbox is still at 0.0ms before the user applies a measurement, compare against the
+        # measured delay so we never show a misleading "-126.0 ms" diff against raw 0.0ms.
+        target_ms = (
+            self._last_measured_delay_ms
+            if (spin_ms == 0.0 and self._last_measured_delay_ms > 0.0 and not self._has_applied_measured)
+            else spin_ms
+        )
         diff = target_ms - current_ms
 
         if self._last_measured_delay_ms > 0.0 or target_ms > 0.0:
@@ -1313,9 +1092,7 @@ class MainWindow(QMainWindow):
             self.btn_apply_obs.setEnabled(True)
             self.current_offset_label.setText(t("current_obs_val", offset=src.sync_offset_ms))
             self._update_obs_diff_display()
-            if self.verifier_window is not None and self.verifier_window.isVisible():
-                out_idx = self.combo_out_device.currentData()
-                self.verifier_window.update_device_and_source(out_idx, src.name)
+            self._sync_verifier_targets()
 
     # --- Measurement Flow ---
     def _start_measurement(self) -> None:
@@ -1427,10 +1204,8 @@ class MainWindow(QMainWindow):
             return
         self.spin_offset.setValue(float(self._latest_obs_offset))
         self._update_obs_diff_display()
-        src_name = ""
-        idx = self.combo_obs_source.currentIndex()
-        if 0 <= idx < len(self.obs_sources):
-            src_name = self.obs_sources[idx].name
+        src = self._selected_obs_audio_source()
+        src_name = src.name if src is not None else ""
         self.status_bar.showMessage(t("status_fetched_obs", name=src_name, offset=self._latest_obs_offset))
 
     def _reset_offset_to_zero(self) -> None:
@@ -1446,20 +1221,20 @@ class MainWindow(QMainWindow):
         new_val = max(0.0, min(self.spin_offset.maximum(), self.spin_offset.value() + delta))
         self.spin_offset.setValue(round(new_val, 1))
 
+    def _sync_apply_measured_button_text(self, value: float) -> None:
+        """Show 'applied' on the measured-delay button when the manual offset matches it."""
+        if self._last_measured_delay_ms <= 0.0:
+            return
+        key = "btn_applied_measured" if abs(value - self._last_measured_delay_ms) < 0.05 else "btn_apply_measured"
+        self.btn_apply_measured.setText(t(key, delay=self._last_measured_delay_ms))
+
     def _on_spinbox_changed(self, value: float) -> None:
         self.slider_offset.blockSignals(True)
         slider_val = int(round(min(1000.0, value) * 10))
         self.slider_offset.setValue(slider_val)
         self.slider_offset.blockSignals(False)
         self.plot_widget.update_manual_offset(float(value))
-
-        # Update apply button text
-        if self._last_measured_delay_ms > 0.0:
-            if abs(value - self._last_measured_delay_ms) < 0.05:
-                self.btn_apply_measured.setText(t("btn_applied_measured", delay=self._last_measured_delay_ms))
-            else:
-                self.btn_apply_measured.setText(t("btn_apply_measured", delay=self._last_measured_delay_ms))
-
+        self._sync_apply_measured_button_text(value)
         self._update_obs_diff_display()
 
     def _on_slider_changed(self, value: int) -> None:
@@ -1468,44 +1243,47 @@ class MainWindow(QMainWindow):
         self.spin_offset.setValue(float_val)
         self.spin_offset.blockSignals(False)
         self.plot_widget.update_manual_offset(float_val)
-
-        # Update apply button text
-        if self._last_measured_delay_ms > 0.0:
-            if abs(float_val - self._last_measured_delay_ms) < 0.05:
-                self.btn_apply_measured.setText(t("btn_applied_measured", delay=self._last_measured_delay_ms))
-            else:
-                self.btn_apply_measured.setText(t("btn_apply_measured", delay=self._last_measured_delay_ms))
+        self._sync_apply_measured_button_text(float_val)
         self._update_obs_diff_display()
 
     # --- Apply to OBS ---
     def _apply_offset_to_obs(self) -> None:
+        """Apply the manual offset to the selected OBS audio (and optionally video) source."""
         if not self.obs_client.is_connected:
             QMessageBox.warning(self, t("dialog_obs_unconnected_title"), t("dialog_obs_unconnected_msg"))
             return
 
-        idx = self.combo_obs_source.currentIndex()
-        if idx < 0 or not self.obs_sources:
-            return
-
-        src = self.combo_obs_source.itemData(idx)
-        if not isinstance(src, ObsAudioSource):
+        src = self._selected_obs_audio_source()
+        if src is None:
             return
 
         target_offset_ms = round(self.spin_offset.value(), 1)
         # Round to integer for OBS Studio compatibility
         target_int_ms = int(round(target_offset_ms))
-        diff = target_int_ms - src.sync_offset_ms
-        diff_str = f"+{diff} ms" if diff > 0 else f"{diff} ms"
+        video_src = self._selected_obs_video_source() if self.check_sync_video.isChecked() else None
 
-        # Check video sync
-        sync_video = self.check_sync_video.isChecked()
-        video_src: Optional[ObsVideoSource] = None
-        v_idx = self.combo_obs_video_source.currentIndex()
-        if sync_video and 0 <= v_idx < len(self.obs_video_sources):
-            cand_v_src = self.combo_obs_video_source.itemData(v_idx)
-            if isinstance(cand_v_src, ObsVideoSource):
-                video_src = cand_v_src
+        if not self._confirm_apply_to_obs(src, video_src, target_int_ms):
+            return
 
+        try:
+            actual_audio_ms = self._apply_audio_offset(src, target_int_ms)
+            if video_src:
+                actual_vid_ms = self._apply_video_delay(video_src, target_int_ms)
+                self._notify_applied_with_video(src.name, actual_audio_ms, video_src.name, actual_vid_ms)
+            else:
+                QMessageBox.information(
+                    self,
+                    t("dialog_applied_title"),
+                    t("dialog_applied_msg", name=src.name, target=actual_audio_ms)
+                )
+                self.status_bar.showMessage(t("status_applied_obs", name=src.name, offset=actual_audio_ms))
+        except Exception as e:
+            QMessageBox.critical(self, t("dialog_apply_error_title"), t("dialog_apply_error_msg", error=str(e)))
+
+    def _confirm_apply_to_obs(
+        self, src: ObsAudioSource, video_src: Optional[ObsVideoSource], target_int_ms: int
+    ) -> bool:
+        """Ask the user to confirm applying offsets to OBS. Returns True if confirmed."""
         if video_src:
             video_target_ms = min(500, target_int_ms)
             limit_note = f"\n{t('warn_render_delay_limit')}" if target_int_ms > 500 else ""
@@ -1518,6 +1296,8 @@ class MainWindow(QMainWindow):
                 limit_note=limit_note,
             )
         else:
+            diff = target_int_ms - src.sync_offset_ms
+            diff_str = f"+{diff} ms" if diff > 0 else f"{diff} ms"
             confirm_msg = t(
                 "dialog_confirm_apply_msg",
                 name=src.name,
@@ -1533,79 +1313,104 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes,
         )
+        return confirm == QMessageBox.StandardButton.Yes
 
-        if confirm != QMessageBox.StandardButton.Yes:
-            return
+    def _apply_audio_offset(self, src: ObsAudioSource, target_int_ms: int) -> int:
+        """Set the audio sync offset on OBS and refresh related UI. Returns the actual value."""
+        actual_audio_ms = self.obs_client.set_sync_offset(src.name, target_int_ms)
+        src.sync_offset_ms = actual_audio_ms
+        self._has_applied_measured = True
+        self.current_offset_label.setText(t("current_obs_val", offset=actual_audio_ms))
+        self._refresh_selected_audio_label(src)
+        self._update_obs_diff_display()
+        return actual_audio_ms
 
-        try:
-            # 1. Apply audio offset (rounded to integer)
-            actual_audio_ms = self.obs_client.set_sync_offset(src.name, target_int_ms)
-            src.sync_offset_ms = actual_audio_ms
-            self._has_applied_measured = True
-            self.current_offset_label.setText(t("current_obs_val", offset=actual_audio_ms))
+    def _notify_applied_with_video(
+        self, audio_name: str, audio_ms: int, video_name: str, video_ms: int
+    ) -> None:
+        """Show the success dialog / status message after applying audio + video offsets."""
+        QMessageBox.information(
+            self,
+            t("dialog_applied_title"),
+            t(
+                "dialog_applied_with_video_msg",
+                audio_name=audio_name,
+                audio_target=audio_ms,
+                video_name=video_name,
+                video_target=video_ms,
+            ),
+        )
+        self.status_bar.showMessage(
+            t(
+                "status_applied_obs_with_video",
+                audio_name=audio_name,
+                audio_offset=audio_ms,
+                video_name=video_name,
+                video_offset=video_ms,
+            )
+        )
 
-            label = f"{src.name} [{actual_audio_ms} ms]"
-            if "output" in src.kind.lower() or "desktop" in src.name.lower() or "オケ" in src.name or "デスクトップ" in src.name:
-                label += f" {t('obs_recommended_source')}"
-            self.combo_obs_source.setItemText(idx, label)
-            self.combo_obs_source.setItemData(idx, label, Qt.ItemDataRole.ToolTipRole)
-            self._update_obs_diff_display()
+    def _selected_obs_audio_source(self) -> Optional[ObsAudioSource]:
+        """Return the OBS audio source currently selected in the combo box (or None)."""
+        idx = self.combo_obs_source.currentIndex()
+        if idx < 0 or not self.obs_sources:
+            return None
+        src = self.combo_obs_source.itemData(idx)
+        return src if isinstance(src, ObsAudioSource) else None
 
-            # 2. Apply video render delay if enabled
-            if video_src:
-                actual_vid_ms = self.obs_client.set_render_delay(video_src.name, target_int_ms)
-                video_src.render_delay_ms = actual_vid_ms
-                self._latest_obs_video_delay = actual_vid_ms
-                v_label = f"{video_src.name} [{actual_vid_ms} ms]"
-                self.combo_obs_video_source.setItemText(v_idx, v_label)
-                self.combo_obs_video_source.setItemData(v_idx, v_label, Qt.ItemDataRole.ToolTipRole)
-                self.current_video_delay_label.setText(t("current_video_delay_val", delay=actual_vid_ms))
+    def _selected_obs_video_source(self) -> Optional[ObsVideoSource]:
+        """Return the OBS video source currently selected in the combo box (or None)."""
+        v_idx = self.combo_obs_video_source.currentIndex()
+        if not (0 <= v_idx < len(self.obs_video_sources)):
+            return None
+        v_src = self.combo_obs_video_source.itemData(v_idx)
+        return v_src if isinstance(v_src, ObsVideoSource) else None
 
-                QMessageBox.information(
-                    self,
-                    t("dialog_applied_title"),
-                    t(
-                        "dialog_applied_with_video_msg",
-                        audio_name=src.name,
-                        audio_target=actual_audio_ms,
-                        video_name=video_src.name,
-                        video_target=actual_vid_ms,
-                    ),
-                )
-                self.status_bar.showMessage(
-                    t(
-                        "status_applied_obs_with_video",
-                        audio_name=src.name,
-                        audio_offset=actual_audio_ms,
-                        video_name=video_src.name,
-                        video_offset=actual_vid_ms,
-                    )
-                )
-            else:
-                QMessageBox.information(
-                    self,
-                    t("dialog_applied_title"),
-                    t("dialog_applied_msg", name=src.name, target=actual_audio_ms)
-                )
-                self.status_bar.showMessage(t("status_applied_obs", name=src.name, offset=actual_audio_ms))
-        except Exception as e:
-            QMessageBox.critical(self, t("dialog_apply_error_title"), t("dialog_apply_error_msg", error=str(e)))
+    def _refresh_selected_audio_label(self, src: ObsAudioSource) -> None:
+        """Re-render the combo label of the selected audio source after its offset changed."""
+        _set_combo_item_label(self.combo_obs_source, self.combo_obs_source.currentIndex(), _format_obs_audio_label(src))
+
+    def _apply_video_delay(self, v_src: ObsVideoSource, target_ms: int) -> int:
+        """Set render delay on OBS for the selected video source and refresh related UI."""
+        actual_vid_ms = self.obs_client.set_render_delay(v_src.name, target_ms)
+        v_src.render_delay_ms = actual_vid_ms
+        self._latest_obs_video_delay = actual_vid_ms
+        _set_combo_item_label(
+            self.combo_obs_video_source,
+            self.combo_obs_video_source.currentIndex(),
+            _format_obs_video_label(v_src),
+        )
+        self.current_video_delay_label.setText(t("current_video_delay_val", delay=actual_vid_ms))
+        return actual_vid_ms
 
     def _get_selected_obs_source_name(self) -> Optional[str]:
         """Helper to get currently selected OBS audio source name if connected."""
-        if not self.obs_client.is_connected or not self.obs_sources:
+        if not self.obs_client.is_connected:
             return None
-        idx = self.combo_obs_source.currentIndex()
-        if 0 <= idx < len(self.obs_sources):
-            src = self.combo_obs_source.itemData(idx)
-            if isinstance(src, ObsAudioSource):
-                return src.name
-        return None
+        src = self._selected_obs_audio_source()
+        return src.name if src is not None else None
+
+    def _get_selected_obs_video_source_name(self) -> Optional[str]:
+        """Helper to get currently selected OBS video source name if connected."""
+        if not self.obs_client.is_connected:
+            return None
+        v_src = self._selected_obs_video_source()
+        return v_src.name if v_src is not None else None
+
+    def _sync_verifier_targets(self) -> None:
+        """Keep the open verifier window's device, audio source, and video source in sync."""
+        if self.verifier_window is not None and self.verifier_window.isVisible():
+            self.verifier_window.update_device_and_source(
+                self.combo_out_device.currentData(),
+                self._get_selected_obs_source_name(),
+                self._get_selected_obs_video_source_name(),
+            )
 
     def _open_verifier_window(self) -> None:
         """Open or focus the independent AV Sync Verifier window."""
         out_idx = self.combo_out_device.currentData()
         cur_source = self._get_selected_obs_source_name()
+        cur_video_source = self._get_selected_obs_video_source_name()
 
         if self.verifier_window is None or not self.verifier_window.isVisible():
             dummy = os.environ.get("SYNCTONE_TEST_DUMMY_AUDIO", "0") == "1"
@@ -1613,13 +1418,15 @@ class MainWindow(QMainWindow):
                 obs_client=self.obs_client,
                 output_device_idx=out_idx,
                 current_obs_source=cur_source,
+                current_obs_video_source=cur_video_source,
                 on_offset_changed_cb=self._on_verifier_offset_changed,
+                on_video_delay_changed_cb=self._on_verifier_video_delay_changed,
                 dummy_mode=dummy,
                 parent=self,
             )
             self.verifier_window.show()
         else:
-            self.verifier_window.update_device_and_source(out_idx, cur_source)
+            self.verifier_window.update_device_and_source(out_idx, cur_source, cur_video_source)
             self.verifier_window.raise_()
             self.verifier_window.activateWindow()
 
@@ -1679,30 +1486,31 @@ class MainWindow(QMainWindow):
             src = self.obs_sources[idx]
             src.sync_offset_ms = target_int
             self.current_offset_label.setText(t("current_obs_val", offset=target_int))
-            label = f"{src.name} [{target_int} ms]"
-            if "output" in src.kind.lower() or "desktop" in src.name.lower() or "オケ" in src.name or "デスクトップ" in src.name:
-                label += f" {t('obs_recommended_source')}"
-            self.combo_obs_source.setItemText(idx, label)
-            self.combo_obs_source.setItemData(idx, label, Qt.ItemDataRole.ToolTipRole)
+            _set_combo_item_label(self.combo_obs_source, idx, _format_obs_audio_label(src))
 
         # Also synchronize linked video source render delay if enabled
         if self.obs_client.is_connected and self.check_sync_video.isChecked():
-            v_idx = self.combo_obs_video_source.currentIndex()
-            if 0 <= v_idx < len(self.obs_video_sources):
-                v_src = self.combo_obs_video_source.itemData(v_idx)
-                if isinstance(v_src, ObsVideoSource):
-                    try:
-                        actual_vid_ms = self.obs_client.set_render_delay(v_src.name, target_int)
-                        v_src.render_delay_ms = actual_vid_ms
-                        self._latest_obs_video_delay = actual_vid_ms
-                        v_label = f"{v_src.name} [{actual_vid_ms} ms]"
-                        self.combo_obs_video_source.setItemText(v_idx, v_label)
-                        self.combo_obs_video_source.setItemData(v_idx, v_label, Qt.ItemDataRole.ToolTipRole)
-                        self.current_video_delay_label.setText(t("current_video_delay_val", delay=actual_vid_ms))
-                    except Exception:
-                        pass
+            v_src = self._selected_obs_video_source()
+            if v_src is not None:
+                try:
+                    self._apply_video_delay(v_src, target_int)
+                except Exception:
+                    pass
 
         self._update_obs_diff_display()
+
+    def _on_verifier_video_delay_changed(self, actual_vid_ms: int) -> None:
+        """Callback when video render delay is adjusted from the verifier window (audio offset stays untouched)."""
+        v_src = self._selected_obs_video_source()
+        if v_src is not None:
+            v_src.render_delay_ms = actual_vid_ms
+            _set_combo_item_label(
+                self.combo_obs_video_source,
+                self.combo_obs_video_source.currentIndex(),
+                _format_obs_video_label(v_src),
+            )
+        self._latest_obs_video_delay = actual_vid_ms
+        self.current_video_delay_label.setText(t("current_video_delay_val", delay=actual_vid_ms))
 
 
     def resizeEvent(self, event) -> None:

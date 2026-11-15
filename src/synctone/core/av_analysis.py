@@ -244,11 +244,33 @@ def estimate_av_offset(
     interval so that the frames sample the cycle densely (see :func:`fit_video_clock`).
     """
     period, c, audio_rms = fit_audio_clock(beep_times)
-    v, video_unc, video_rms, n_used = fit_video_clock(frame_times, bar_x, period)
+    # Only scan frames during which the timecode sweep was in steady state.
+    # Trim one cycle after the first beep (so video render delay up to ~500 ms has already started
+    # moving the bar) and before the last beep (in case playback was stopped right after it).
+    t_arr = np.asarray(frame_times, dtype=np.float64).ravel()
+    x_arr = np.asarray(bar_x, dtype=np.float64).ravel()
+    beeps_sorted = np.sort(np.asarray(beep_times, dtype=np.float64).ravel())
+    inner_window = (t_arr >= beeps_sorted[0] + period * 0.5) & (t_arr <= beeps_sorted[-1] - period * 0.2)
+    if np.count_nonzero(inner_window & np.isfinite(x_arr)) >= 20:
+        t_arr = t_arr[inner_window]
+        x_arr = x_arr[inner_window]
+    else:
+        in_window = (t_arr >= beeps_sorted[0]) & (t_arr <= beeps_sorted[-1])
+        if np.count_nonzero(in_window & np.isfinite(x_arr)) >= 10:
+            t_arr = t_arr[in_window]
+            x_arr = x_arr[in_window]
+
+    v, video_unc, video_rms, n_used = fit_video_clock(t_arr, x_arr, period)
     offset = ((v - c + period / 2.0) % period) - period / 2.0
+    total_unc_ms = (video_unc + audio_rms) * 1000.0
+    if total_unc_ms > 80.0 or not np.isfinite(video_rms):
+        raise ValueError(
+            f"Timecode bar sweep could not be reliably tracked (uncertainty ±{total_unc_ms:.1f} ms). "
+            "Make sure the SyncTone window is captured in 'Recording analysis' mode and playing while recording."
+        )
     return AvOffsetResult(
         offset_ms=offset * 1000.0,
-        uncertainty_ms=(video_unc + audio_rms) * 1000.0,
+        uncertainty_ms=total_unc_ms,
         period_ms=period * 1000.0,
         audio_rms_ms=audio_rms * 1000.0,
         video_rms_ms=video_rms * 1000.0,

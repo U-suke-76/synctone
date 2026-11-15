@@ -12,8 +12,18 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Automated OBS Recording AV Sync Analysis (`📐 Recording Analysis (Timecode)` / `📂 Analyze recording...`)**: Added a timecode sweeping-bar mode driven by the audio clock phase and PyAV-based recording analysis (`mp4` / `mkv` / `mov` / `flv` / `ts`) that measures video-vs-audio offset with sub-frame (~1–2 ms) precision. Displays a 3-tier verdict (`<= 8 ms` OK / `<= 17 ms` minor / `> 17 ms` large) and offers one-click correction of the OBS video source's Render Delay filter without disturbing the microphone-calibrated audio sync offset.
+- **Dedicated Direct3D 11 Window for OBS Game Capture (`🎮 Open Game Capture Window`)**: Added a top-level Direct3D 11 target window that automatically selects the primary high-VRAM GPU adapter so OBS "Game Capture" sources can hook and calibrate render delay directly in default shared-texture mode alongside "Window Capture".
 - **Live Microphone Input Level Meter (`🎤 Input Level`)**: Added an always-on, real-time input level meter (dB scale, green / yellow for low input / red with a clipping warning) to the Audio Devices panel so you can check the mic level before measuring. It restarts automatically when the recording device changes and fails silently (`N/A`) if the microphone cannot be opened.
 - **Live Level Display During Measurement**: The meter keeps moving while a measurement is running, fed directly by the measurement stream itself (`AudioEngine.play_and_record(level_callback=...)`), so no second stream competes for the microphone.
+
+### Changed
+- **Streamlined AV Sync Checker Modes & Video Delay Fine-Tuning**: Removed the redundant "🎵 Auditory Click (Metronome)" mode in favor of the two core workflows ("📺 Visual & Beep" and "📐 Recording Analysis"). When a video source is selected, the bottom trim buttons (`-5 ms / -1 ms / +1 ms / +5 ms`) now adjust the video source's Render Delay directly while keeping the audio sync offset intact.
+- **GUI Module Architecture Refactoring**: Extracted background worker threads (`gui/workers.py`) and stylesheet definitions (`gui/styles.py`) out of `main_window.py` and modularized UI builder and OBS application helpers.
+
+### Fixed
+- **Fixed OBS Offset Difference Display Before Applying Measurement**: Fixed an issue where fetching or selecting an OBS audio source after measurement (while the manual offset spinbox was still at `0.0 ms`) displayed a difference against `0.0 ms` instead of the newly measured delay.
+- **Fixed Dark-Theme Styling & Text Clipping in AV Sync Checker**: Scoped QSS selectors in `SyncVerifierWindow` to fix black background boxes behind labels, invisible radio button indicators, and clipped mode descriptions.
 
 ## [1.1.0] - 2026-10-24
 
