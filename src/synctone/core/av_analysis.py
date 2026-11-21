@@ -25,6 +25,7 @@ from typing import Optional, Tuple
 import numpy as np
 from scipy.signal import correlate, find_peaks, hilbert
 
+from synctone.core.chirp import parabolic_subsample_offset
 from synctone.core.verifier_audio import generate_beep_sound
 
 
@@ -91,12 +92,7 @@ def detect_beep_onsets(
         lo = max(0, p - search)
         hi = min(len(abs_corr), p + search + 1)
         k = lo + int(np.argmax(abs_corr[lo:hi]))
-        sub = 0.0
-        if 0 < k < len(abs_corr) - 1:
-            y0, y1, y2 = abs_corr[k - 1], abs_corr[k], abs_corr[k + 1]
-            denom = y0 - 2.0 * y1 + y2
-            if abs(denom) > 1e-12:
-                sub = float(np.clip(0.5 * (y0 - y2) / denom, -0.5, 0.5))
+        sub = parabolic_subsample_offset(abs_corr, k)
         times.append((k + sub) / sample_rate)
     return np.asarray(times, dtype=np.float64)
 

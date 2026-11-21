@@ -18,6 +18,18 @@ class DelayEstimateResult:
     is_inverted: bool = False  # True if microphone has inverted polarity (180 deg out-of-phase)
 
 
+def parabolic_subsample_offset(values: np.ndarray, peak_idx: int) -> float:
+    """Estimate sub-sample peak offset in [-0.5, 0.5] using 3-point parabolic interpolation."""
+    if 0 < peak_idx < len(values) - 1:
+        y0 = float(values[peak_idx - 1])
+        y1 = float(values[peak_idx])
+        y2 = float(values[peak_idx + 1])
+        denom = y0 - 2.0 * y1 + y2
+        if abs(denom) > 1e-12:
+            return float(np.clip(0.5 * (y0 - y2) / denom, -0.5, 0.5))
+    return 0.0
+
+
 @dataclass
 class MultiMeasureResult:
     """Aggregated result of multiple measurement runs (e.g., 3-run median filter)."""
@@ -222,16 +234,7 @@ class ChirpAnalyzer:
         peak_val = float(interp_corr[peak_idx_masked])
 
         # Parabolic interpolation around peak for sub-sample accuracy
-        subsample_offset = 0.0
-        if 0 < peak_idx_masked < len(masked_corr) - 1:
-            y0 = interp_corr[peak_idx_masked - 1]
-            y1 = interp_corr[peak_idx_masked]
-            y2 = interp_corr[peak_idx_masked + 1]
-            denom = y0 - 2.0 * y1 + y2
-            if abs(denom) > 1e-12:
-                subsample_offset = 0.5 * (y0 - y2) / denom
-                # Clamp offset to [-0.5, 0.5]
-                subsample_offset = max(-0.5, min(0.5, subsample_offset))
+        subsample_offset = parabolic_subsample_offset(interp_corr, peak_idx_masked)
 
         refined_delay_samples = float(peak_lag + subsample_offset)
         delay_ms = (refined_delay_samples / self.sample_rate) * 1000.0

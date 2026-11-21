@@ -1,4 +1,4 @@
-"""Internationalization (i18n) module supporting Japanese, English, and Korean."""
+"""Internationalization (i18n) module supporting Japanese, English, Korean, Traditional Chinese, and Simplified Chinese."""
 
 from typing import Dict, Any, Optional
 from PySide6.QtCore import QLocale

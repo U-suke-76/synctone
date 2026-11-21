@@ -52,12 +52,16 @@ def decode_recording(path: str, max_seconds: Optional[float] = None) -> DecodedR
         frame_times = []
         profiles = []
 
+        video_done = False
         for packet in container.demux(vstream, astream):
             if packet.stream is vstream:
+                if video_done:
+                    continue
                 for frame in packet.decode():
                     if frame.time is None:
                         continue
                     if max_seconds is not None and frame.time > max_seconds:
+                        video_done = True
                         break
                     gray = frame.to_ndarray(format="gray")
                     profiles.append(gray.mean(axis=0, dtype=np.float32))
@@ -66,9 +70,19 @@ def decode_recording(path: str, max_seconds: Optional[float] = None) -> DecodedR
                 for frame in packet.decode():
                     if audio_start is None and frame.time is not None:
                         audio_start = float(frame.time)
+                    if max_seconds is not None and frame.time is not None and frame.time > max_seconds + 1.0:
+                        if video_done:
+                            break
+                        continue
                     audio_rate = int(frame.sample_rate)
                     for out in resampler.resample(frame):
                         audio_chunks.append(out.to_ndarray().reshape(-1))
+            if video_done and max_seconds is not None:
+                # Stop demuxing once both video and sufficient audio up to max_seconds are collected
+                if audio_start is not None and len(audio_chunks) > 0:
+                    decoded_audio_s = audio_start + sum(len(c) for c in audio_chunks) / max(1, audio_rate)
+                    if decoded_audio_s > max_seconds:
+                        break
 
         for out in resampler.resample(None):
             audio_chunks.append(out.to_ndarray().reshape(-1))

@@ -378,6 +378,13 @@ def test_multilingual_switching(qapp):
     assert win.plot_widget.align_checkbox.text() == "補正プレビュー (重ね合わせ)"
     assert win.plot_widget.btn_zoom_view.text() == "🔍 拡大表示 (山谷確認)"
 
+    # Verify all 5 language dictionaries share the exact same set of translation keys
+    from synctone.i18n import LANGUAGES, TRANSLATIONS
+    base_keys = set(TRANSLATIONS["ja"].keys())
+    for lang_code in LANGUAGES:
+        assert lang_code in TRANSLATIONS
+        assert set(TRANSLATIONS[lang_code].keys()) == base_keys
+
     win.close()
     win.deleteLater()
     qapp.processEvents()

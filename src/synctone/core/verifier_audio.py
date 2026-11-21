@@ -15,7 +15,7 @@ def generate_beep_sound(
 ) -> np.ndarray:
     """Generate a clean high-frequency beep tone (A6 1760Hz) for visual flash AV sync.
 
-    Uses quick cosine ramp-in/out (2ms) to eliminate click transients while keeping
+    Uses quick cosine ramp-in/out (3ms) to eliminate click transients while keeping
     sharp auditory attack timing.
     """
     n_samples = int(sample_rate * duration)
@@ -127,46 +127,40 @@ class SyncAudioPlayer:
             self._is_running = True
             return
 
+        candidate_rates = [self.sample_rate]
         try:
-            self._stream = sd.OutputStream(
-                samplerate=self.sample_rate,
-                channels=2,
-                dtype="float32",
-                device=self.output_device_idx,
-                callback=self._audio_callback,
-                blocksize=512,
-            )
-            self._stream.start()
-            self._use_fallback = False
-            self._is_running = True
+            dev_info = sd.query_devices(self.output_device_idx, "output")
+            alt_sr = int(round(float(dev_info.get("default_samplerate", 44100))))
+            if alt_sr >= 8000 and alt_sr != self.sample_rate:
+                candidate_rates.append(alt_sr)
         except Exception:
-            # Try device default sample rate (e.g. 44100 Hz) if 48000 Hz is rejected by hardware
+            pass
+
+        for sr in candidate_rates:
             try:
-                dev_info = sd.query_devices(self.output_device_idx, "output")
-                alt_sr = int(round(float(dev_info.get("default_samplerate", 44100))))
-                if alt_sr >= 8000 and alt_sr != self.sample_rate:
-                    self.sample_rate = alt_sr
+                if sr != self.sample_rate:
+                    self.sample_rate = sr
                     self._tone_samples = self._prepare_tone()
                     self._cycle_samples = self._calc_cycle_samples()
-                    self._stream = sd.OutputStream(
-                        samplerate=self.sample_rate,
-                        channels=2,
-                        dtype="float32",
-                        device=self.output_device_idx,
-                        callback=self._audio_callback,
-                        blocksize=512,
-                    )
-                    self._stream.start()
-                    self._use_fallback = False
-                    self._is_running = True
-                    return
+                self._stream = sd.OutputStream(
+                    samplerate=self.sample_rate,
+                    channels=2,
+                    dtype="float32",
+                    device=self.output_device_idx,
+                    callback=self._audio_callback,
+                    blocksize=512,
+                )
+                self._stream.start()
+                self._use_fallback = False
+                self._is_running = True
+                return
             except Exception:
-                pass
-            # Fallback for devices without working hardware output (headless / mock test)
-            self._stream = None
-            self._fallback_start_time = time.perf_counter()
-            self._use_fallback = True
-            self._is_running = True
+                self._stream = None
+
+        # Fallback for devices without working hardware output (headless / mock test)
+        self._fallback_start_time = time.perf_counter()
+        self._use_fallback = True
+        self._is_running = True
 
 
     def stop(self) -> None:
@@ -231,22 +225,26 @@ class SyncAudioPlayer:
         return (a + rate * (now - t0)) % 1.0
 
     def _audio_callback(self, outdata: np.ndarray, frames: int, time_info, status) -> None:
-        """Real-time sounddevice output stream callback (strictly lock-free)."""
+        """Real-time sounddevice output stream callback (strictly lock-free and vectorized)."""
         cycle = self._cycle_samples
         tone = self._tone_samples
         tone_len = len(tone)
 
-        buf = np.zeros((frames, 2), dtype=np.float32)
+        outdata.fill(0.0)
         pos = self._current_sample_in_cycle
         wraps = self._wraps
+        written = 0
 
-        for i in range(frames):
+        while written < frames:
+            chunk = min(frames - written, cycle - pos)
             if pos < tone_len:
-                sample_val = tone[pos]
-                buf[i, 0] = sample_val
-                buf[i, 1] = sample_val
+                tone_end = min(pos + chunk, tone_len)
+                n_tone = tone_end - pos
+                outdata[written:written + n_tone, 0] = tone[pos:tone_end]
+                outdata[written:written + n_tone, 1] = tone[pos:tone_end]
 
-            pos += 1
+            pos += chunk
+            written += chunk
             if pos >= cycle:
                 pos = 0
                 wraps += 1
@@ -254,4 +252,3 @@ class SyncAudioPlayer:
         self._current_sample_in_cycle = pos
         self._wraps = wraps
         self._clock_hist.append((time.perf_counter(), wraps + pos / float(cycle)))
-        outdata[:] = buf

@@ -74,6 +74,11 @@ def test_decode_recording_shapes(tmp_path):
     assert abs(len(rec.frame_times) - 3.0 * FPS) <= 2
     assert np.all(np.diff(rec.frame_times) > 0)
 
+    # Verify max_seconds stops decoding early
+    rec_short = decode_recording(str(path), max_seconds=1.0)
+    assert rec_short.frame_times[-1] <= 1.0 + 1e-6
+    assert len(rec_short.frame_times) < len(rec.frame_times)
+
 
 @pytest.mark.parametrize("true_offset_ms", [-40.0, 0.0, 55.0])
 def test_analyze_recording_recovers_offset_from_mp4(tmp_path, true_offset_ms):

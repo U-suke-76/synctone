@@ -293,6 +293,23 @@ def test_analysis_mode_draws_bar_at_clock_phase(qapp):
         assert win.game_capture_window is not None
         assert win.game_capture_window.minimumSize().width() == 480
         assert win.game_capture_window.minimumSize().height() == 220
+
+        # Verify zero-copy shared NumPy + QImage buffer in GameCaptureTargetWindow
+        gc_win = win.game_capture_window
+        gc_win._ensure_frame_buffer(320, 180)
+        buf_ref = gc_win._frame_array
+        img_ref = gc_win._frame_image
+        assert buf_ref is not None and img_ref is not None
+        assert buf_ref.shape == (180, 320, 4)
+
+        # Calling _ensure_frame_buffer with the same dimensions reuses the exact same buffer
+        gc_win._ensure_frame_buffer(320, 180)
+        assert gc_win._frame_array is buf_ref
+        assert gc_win._frame_image is img_ref
+
+        # Rendering onto _frame_image mutates _frame_array directly in-place (zero-copy)
+        win.canvas.render_scene(img_ref, 320, 180)
+        assert int(buf_ref.sum()) > 0
     finally:
         win.player._is_running = False
         win.close()

@@ -30,11 +30,18 @@ atexit.register(lambda: qInstallMessageHandler(None))
 
 from synctone.core.chirp import ChirpAnalyzer, MultiMeasureResult
 from synctone.core.audio_io import AudioEngine, AudioDeviceInfo, InputLevelMonitor
-from synctone.obs.client import ObsClient, ObsAudioSource, ObsVideoSource
+from synctone.obs.client import MAX_RENDER_DELAY_MS, ObsClient, ObsAudioSource, ObsVideoSource
 from synctone.gui.plot_widget import SyncPlotWidget
 from synctone.gui.verifier_window import SyncVerifierWindow
 from synctone.gui.workers import MeasurementWorker, TestToneWorker  # noqa: F401 (re-exported)
-from synctone.gui.styles import DARK_THEME_QSS, PANEL_FRAME_QSS, level_bar_style
+from synctone.gui.styles import (
+    APPLY_MEASURED_BTN_QSS,
+    APPLY_OBS_BTN_QSS,
+    DARK_THEME_QSS,
+    PANEL_FRAME_QSS,
+    TRIM_DELTA_BTN_QSS,
+    level_bar_style,
+)
 from synctone.i18n import t, LANGUAGES, I18nManager
 
 # Keywords identifying sources that usually carry the backing track (desktop / output audio)
@@ -369,23 +376,7 @@ class MainWindow(QMainWindow):
         # Row 1: Primary action button (Full width)
         self.btn_apply_measured = QPushButton()
         self.btn_apply_measured.setEnabled(False)
-        self.btn_apply_measured.setStyleSheet("""
-            QPushButton {
-                background-color: #1565c0;
-                color: #ffffff;
-                font-weight: bold;
-                padding: 5px 8px;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #1976d2;
-            }
-            QPushButton:disabled {
-                background-color: #262635;
-                color: #555566;
-                border: 1px solid #333344;
-            }
-        """)
+        self.btn_apply_measured.setStyleSheet(APPLY_MEASURED_BTN_QSS)
         self.btn_apply_measured.clicked.connect(self._apply_measured_to_adjustment)
         adj_layout.addWidget(self.btn_apply_measured)
 
@@ -395,25 +386,7 @@ class MainWindow(QMainWindow):
 
         self.btn_apply_obs = QPushButton()
         self.btn_apply_obs.setEnabled(False)
-        self.btn_apply_obs.setStyleSheet("""
-            QPushButton {
-                background-color: #28283c;
-                color: #bbbbdd;
-                padding: 4px 6px;
-                font-size: 11px;
-                border: 1px solid #3d3d56;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #383854;
-                color: #ffffff;
-            }
-            QPushButton:disabled {
-                background-color: #1f1f2a;
-                color: #555566;
-                border: 1px solid #2a2a38;
-            }
-        """)
+        self.btn_apply_obs.setStyleSheet(APPLY_OBS_BTN_QSS)
         self.btn_apply_obs.clicked.connect(self._apply_obs_to_adjustment)
         btn_sub_row.addWidget(self.btn_apply_obs, stretch=3)
 
@@ -449,20 +422,7 @@ class MainWindow(QMainWindow):
 
         for delta, text in [(-1.0, "-1ms"), (-0.1, "-0.1ms"), (+0.1, "+0.1ms"), (+1.0, "+1ms")]:
             btn = QPushButton(text)
-            btn.setStyleSheet("""
-                QPushButton {
-                    padding: 4px 0px;
-                    font-size: 11px;
-                    font-weight: 500;
-                    background-color: #232334;
-                    border: 1px solid #3d3d52;
-                    border-radius: 4px;
-                }
-                QPushButton:hover {
-                    background-color: #313148;
-                    border-color: #5c5c7a;
-                }
-            """)
+            btn.setStyleSheet(TRIM_DELTA_BTN_QSS)
             btn.clicked.connect(lambda checked=False, d=delta: self._adjust_offset(d))
             trim_btn_row.addWidget(btn)
 
@@ -622,13 +582,7 @@ class MainWindow(QMainWindow):
         self.label_manual_trim.setText(t("manual_trim"))
 
         # Applied / measured button
-        if self._last_measured_delay_ms > 0.0:
-            if abs(self.spin_offset.value() - self._last_measured_delay_ms) < 0.05:
-                self.btn_apply_measured.setText(t("btn_applied_measured", delay=self._last_measured_delay_ms))
-            else:
-                self.btn_apply_measured.setText(t("btn_apply_measured", delay=self._last_measured_delay_ms))
-        else:
-            self.btn_apply_measured.setText(t("btn_apply_measured_unmeasured"))
+        self._sync_apply_measured_button_text()
 
         # OBS current value button
         if self._latest_obs_offset is not None:
@@ -656,23 +610,23 @@ class MainWindow(QMainWindow):
                 self.combo_obs_video_source.setItemText(0, t("obs_not_connected_video_source"))
             self.current_video_delay_label.setText(t("current_video_delay_none"))
         else:
-            idx = self.combo_obs_source.currentIndex()
-            if 0 <= idx < len(self.obs_sources):
-                src = self.obs_sources[idx]
+            src = self._selected_obs_audio_source()
+            if src is not None:
                 self.current_offset_label.setText(t("current_obs_val", offset=src.sync_offset_ms))
             else:
                 self.current_offset_label.setText(t("current_obs_none"))
 
-            v_idx = self.combo_obs_video_source.currentIndex()
-            if 0 <= v_idx < len(self.obs_video_sources):
-                v_src = self.obs_video_sources[v_idx]
+            v_src = self._selected_obs_video_source()
+            if v_src is not None:
                 self.current_video_delay_label.setText(t("current_video_delay_val", delay=v_src.render_delay_ms))
             else:
                 self.current_video_delay_label.setText(t("current_video_delay_none"))
 
         self._update_obs_diff_display()
+        self._refresh_measurement_result_labels()
 
-        # Results badges
+    def _refresh_measurement_result_labels(self) -> None:
+        """Render the delay, run history, and stability/level badge for the last measurement."""
         if self.last_multi_result:
             median_ms = max(0.0, self.last_multi_result.median_delay_ms)
             self.delay_label.setText(t("detected_delay", delay=median_ms))
@@ -813,6 +767,62 @@ class MainWindow(QMainWindow):
         self._sync_verifier_targets()
 
     # --- Device Management ---
+    @staticmethod
+    def _get_hostapi_rank(hostapi: str) -> int:
+        h = hostapi.lower()
+        if "wasapi" in h:
+            return 0
+        if "directsound" in h:
+            return 1
+        if "wdm" in h:
+            return 2
+        if "mme" in h:
+            return 3
+        return 4
+
+    @staticmethod
+    def _format_device_label(dev: AudioDeviceInfo, is_output: bool) -> str:
+        h = dev.hostapi_name
+        is_def = dev.is_default_output if is_output else dev.is_default_input
+        if "wasapi" in h.lower():
+            badge = t("device_rec_wasapi")
+        elif "mme" in h.lower():
+            badge = t("device_compat_mme")
+        else:
+            badge = f"({h})"
+        def_badge = t("device_default") if is_def else ""
+        return f"{dev.name} {badge}{def_badge}"
+
+    def _populate_device_combo(
+        self,
+        combo: QComboBox,
+        devices: List[AudioDeviceInfo],
+        saved_name: str,
+        is_output: bool,
+    ) -> None:
+        """Sort devices by host API preference, populate combo box, and select the best match."""
+        devices.sort(
+            key=lambda d: (
+                self._get_hostapi_rank(d.hostapi_name),
+                not (d.is_default_output if is_output else d.is_default_input),
+                d.name,
+            )
+        )
+        match_idx = -1
+        first_wasapi = -1
+        for idx, dev in enumerate(devices):
+            label = self._format_device_label(dev, is_output=is_output)
+            combo.addItem(label, dev.index)
+            is_def = dev.is_default_output if is_output else dev.is_default_input
+            if "wasapi" in dev.hostapi_name.lower() and (first_wasapi == -1 or is_def):
+                first_wasapi = idx
+            if saved_name and (saved_name == label or saved_name in label):
+                match_idx = idx
+
+        if combo.count() > 0:
+            chosen = match_idx if match_idx >= 0 else (first_wasapi if first_wasapi >= 0 else 0)
+            combo.setCurrentIndex(chosen)
+
     def _refresh_audio_devices(self) -> None:
         self.combo_out_device.blockSignals(True)
         self.combo_in_device.blockSignals(True)
@@ -821,67 +831,11 @@ class MainWindow(QMainWindow):
 
         try:
             out_devs, in_devs = self.audio_engine.get_devices()
-            saved_out = self.settings.value("audio/output_device_name", "")
-            saved_in = self.settings.value("audio/input_device_name", "")
+            saved_out = str(self.settings.value("audio/output_device_name", "") or "")
+            saved_in = str(self.settings.value("audio/input_device_name", "") or "")
 
-            def get_api_rank(hostapi: str) -> int:
-                h = hostapi.lower()
-                if "wasapi" in h:
-                    return 0
-                if "directsound" in h:
-                    return 1
-                if "wdm" in h:
-                    return 2
-                if "mme" in h:
-                    return 3
-                return 4
-
-            # Sort so WASAPI comes first, then DirectSound, WDM-KS, and MME last
-            out_devs.sort(key=lambda d: (get_api_rank(d.hostapi_name), not d.is_default_output, d.name))
-            in_devs.sort(key=lambda d: (get_api_rank(d.hostapi_name), not d.is_default_input, d.name))
-
-            def make_label(dev: AudioDeviceInfo, is_output: bool) -> str:
-                h = dev.hostapi_name
-                is_def = dev.is_default_output if is_output else dev.is_default_input
-                if "wasapi" in h.lower():
-                    badge = t("device_rec_wasapi")
-                elif "mme" in h.lower():
-                    badge = t("device_compat_mme")
-                else:
-                    badge = f"({h})"
-                def_badge = t("device_default") if is_def else ""
-                return f"{dev.name} {badge}{def_badge}"
-
-            out_match_idx = -1
-            first_wasapi_out = -1
-            for idx, dev in enumerate(out_devs):
-                label = make_label(dev, is_output=True)
-                self.combo_out_device.addItem(label, dev.index)
-                if "wasapi" in dev.hostapi_name.lower():
-                    if first_wasapi_out == -1 or dev.is_default_output:
-                        first_wasapi_out = idx
-                if saved_out and (saved_out == label or saved_out in label):
-                    out_match_idx = idx
-
-            in_match_idx = -1
-            first_wasapi_in = -1
-            for idx, dev in enumerate(in_devs):
-                label = make_label(dev, is_output=False)
-                self.combo_in_device.addItem(label, dev.index)
-                if "wasapi" in dev.hostapi_name.lower():
-                    if first_wasapi_in == -1 or dev.is_default_input:
-                        first_wasapi_in = idx
-                if saved_in and (saved_in == label or saved_in in label):
-                    in_match_idx = idx
-
-            # Choose best default
-            chosen_out = out_match_idx if out_match_idx >= 0 else (first_wasapi_out if first_wasapi_out >= 0 else 0)
-            chosen_in = in_match_idx if in_match_idx >= 0 else (first_wasapi_in if first_wasapi_in >= 0 else 0)
-
-            if self.combo_out_device.count() > 0:
-                self.combo_out_device.setCurrentIndex(chosen_out)
-            if self.combo_in_device.count() > 0:
-                self.combo_in_device.setCurrentIndex(chosen_in)
+            self._populate_device_combo(self.combo_out_device, out_devs, saved_out, is_output=True)
+            self._populate_device_combo(self.combo_in_device, in_devs, saved_in, is_output=False)
 
             self.status_bar.showMessage(t("status_device_refreshed", out_count=len(out_devs), in_count=len(in_devs)))
         except Exception as e:
@@ -1143,30 +1097,16 @@ class MainWindow(QMainWindow):
         self.last_multi_result = multi
         self.last_recorded = best_recorded
 
-        median_ms = max(0.0, multi.median_delay_ms)
-        self.delay_label.setText(t("detected_delay", delay=median_ms))
-
-        # Runs history text
-        runs_strs = [f"{r.delay_ms:.1f}ms" for r in multi.individual_results]
-        if len(runs_strs) > 1:
-            self.runs_label.setText(t("runs_history", history=" / ".join(runs_strs)))
-        else:
-            self.runs_label.setText(t("single_run", run=runs_strs[0]))
-
-        # Jitter, stability, and audio signal level diagnostics badge
-        self._update_stability_and_level_badge(multi, best_recorded)
-
+        self._refresh_measurement_result_labels()
 
         # Set manual adjustment controls with 0.1ms precision (preserve user's current manual offset!)
+        median_ms = max(0.0, multi.median_delay_ms)
         precise_ms = round(median_ms, 1)
         self._last_measured_delay_ms = precise_ms
         self.btn_apply_measured.setEnabled(True)
 
         current_offset_ms = round(float(self.spin_offset.value()), 1)
-        if abs(current_offset_ms - precise_ms) < 0.05 and precise_ms > 0.0:
-            self.btn_apply_measured.setText(t("btn_applied_measured", delay=precise_ms))
-        else:
-            self.btn_apply_measured.setText(t("btn_apply_measured", delay=precise_ms))
+        self._sync_apply_measured_button_text(current_offset_ms)
 
         self.plot_widget.set_data(
             ref_signal=self.analyzer.reference_signal,
@@ -1221,11 +1161,13 @@ class MainWindow(QMainWindow):
         new_val = max(0.0, min(self.spin_offset.maximum(), self.spin_offset.value() + delta))
         self.spin_offset.setValue(round(new_val, 1))
 
-    def _sync_apply_measured_button_text(self, value: float) -> None:
+    def _sync_apply_measured_button_text(self, value: Optional[float] = None) -> None:
         """Show 'applied' on the measured-delay button when the manual offset matches it."""
         if self._last_measured_delay_ms <= 0.0:
+            self.btn_apply_measured.setText(t("btn_apply_measured_unmeasured"))
             return
-        key = "btn_applied_measured" if abs(value - self._last_measured_delay_ms) < 0.05 else "btn_apply_measured"
+        cur_val = self.spin_offset.value() if value is None else value
+        key = "btn_applied_measured" if abs(cur_val - self._last_measured_delay_ms) < 0.05 else "btn_apply_measured"
         self.btn_apply_measured.setText(t(key, delay=self._last_measured_delay_ms))
 
     def _on_spinbox_changed(self, value: float) -> None:
@@ -1285,8 +1227,8 @@ class MainWindow(QMainWindow):
     ) -> bool:
         """Ask the user to confirm applying offsets to OBS. Returns True if confirmed."""
         if video_src:
-            video_target_ms = min(500, target_int_ms)
-            limit_note = f"\n{t('warn_render_delay_limit')}" if target_int_ms > 500 else ""
+            video_target_ms = min(MAX_RENDER_DELAY_MS, target_int_ms)
+            limit_note = f"\n{t('warn_render_delay_limit')}" if target_int_ms > MAX_RENDER_DELAY_MS else ""
             confirm_msg = t(
                 "dialog_confirm_apply_with_video_msg",
                 audio_name=src.name,
@@ -1512,10 +1454,6 @@ class MainWindow(QMainWindow):
         self._latest_obs_video_delay = actual_vid_ms
         self.current_video_delay_label.setText(t("current_video_delay_val", delay=actual_vid_ms))
 
-
-    def resizeEvent(self, event) -> None:
-        """Handle window resizing smoothly in real-time."""
-        super().resizeEvent(event)
 
     def closeEvent(self, event):
         self._level_timer.stop()

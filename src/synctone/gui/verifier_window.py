@@ -1,22 +1,21 @@
 """Real-time AV Sync and Auditory Verification Window (AV Sync Checker)."""
 
-import ctypes
 import math
-import os
-import sys
 from typing import Optional, Callable
 from PySide6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QSlider, QSpinBox, QRadioButton, QButtonGroup, QFrame, QSizePolicy,
     QFileDialog, QMessageBox,
 )
-from PySide6.QtCore import Qt, QTimer, QPoint, QRectF, QSize
-from PySide6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QKeyEvent, QWindow, QImage, QResizeEvent, QExposeEvent
+from PySide6.QtCore import Qt, QTimer, QPoint, QRectF
+from PySide6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QKeyEvent
 
 from synctone.core.av_analysis import AvOffsetResult
 from synctone.core.verifier_audio import SyncAudioPlayer
+from synctone.gui.game_capture import GameCaptureTargetWindow, _D3D11Presenter  # noqa: F401
+from synctone.gui.styles import VERIFIER_DIALOG_QSS
 from synctone.gui.workers import RecordingAnalysisWorker
-from synctone.obs.client import ObsClient
+from synctone.obs.client import MAX_RENDER_DELAY_MS, ObsClient
 from synctone.i18n import t
 
 # Analysis workers still running after their window was closed (kept alive until they finish)
@@ -198,291 +197,6 @@ class SyncCanvas(QWidget):
             painter.drawText(0, int(track_y + 42), w, 24, Qt.AlignmentFlag.AlignCenter, t("verifier_play"))
 
 
-class _D3D11Presenter:
-    """Direct3D 11 SwapChain presenter bound explicitly to the highest-VRAM discrete GPU adapter."""
-
-    def __init__(self, hwnd: int, width: int, height: int):
-        from ctypes import wintypes
-
-        self.width = max(64, int(width))
-        self.height = max(64, int(height))
-        self.hwnd = int(hwnd)
-        self.swapchain = ctypes.c_void_p()
-        self.device = ctypes.c_void_p()
-        self.context = ctypes.c_void_p()
-        self.backbuf = ctypes.c_void_p()
-        self._present_fn = None
-        self._update_subresource_fn = None
-
-        dxgi = ctypes.windll.dxgi
-        d3d11 = ctypes.windll.d3d11
-
-        class GUID(ctypes.Structure):
-            _fields_ = [
-                ("Data1", ctypes.c_ulong),
-                ("Data2", ctypes.c_ushort),
-                ("Data3", ctypes.c_ushort),
-                ("Data4", ctypes.c_ubyte * 8),
-            ]
-
-        class LUID(ctypes.Structure):
-            _fields_ = [("LowPart", wintypes.DWORD), ("HighPart", wintypes.LONG)]
-
-        class DXGI_ADAPTER_DESC1(ctypes.Structure):
-            _fields_ = [
-                ("Description", wintypes.WCHAR * 128),
-                ("VendorId", wintypes.UINT),
-                ("DeviceId", wintypes.UINT),
-                ("SubSysId", wintypes.UINT),
-                ("Revision", wintypes.UINT),
-                ("DedicatedVideoMemory", ctypes.c_size_t),
-                ("DedicatedSystemMemory", ctypes.c_size_t),
-                ("SharedSystemMemory", ctypes.c_size_t),
-                ("AdapterLuid", LUID),
-                ("Flags", wintypes.UINT),
-            ]
-
-        class DXGI_RATIONAL(ctypes.Structure):
-            _fields_ = [("Numerator", wintypes.UINT), ("Denominator", wintypes.UINT)]
-
-        class DXGI_MODE_DESC(ctypes.Structure):
-            _fields_ = [
-                ("Width", wintypes.UINT),
-                ("Height", wintypes.UINT),
-                ("RefreshRate", DXGI_RATIONAL),
-                ("Format", wintypes.UINT),
-                ("ScanlineOrdering", wintypes.UINT),
-                ("Scaling", wintypes.UINT),
-            ]
-
-        class DXGI_SAMPLE_DESC(ctypes.Structure):
-            _fields_ = [("Count", wintypes.UINT), ("Quality", wintypes.UINT)]
-
-        class DXGI_SWAP_CHAIN_DESC(ctypes.Structure):
-            _fields_ = [
-                ("BufferDesc", DXGI_MODE_DESC),
-                ("SampleDesc", DXGI_SAMPLE_DESC),
-                ("BufferUsage", wintypes.UINT),
-                ("BufferCount", wintypes.UINT),
-                ("OutputWindow", wintypes.HWND),
-                ("Windowed", wintypes.BOOL),
-                ("SwapEffect", wintypes.UINT),
-                ("Flags", wintypes.UINT),
-            ]
-
-        iid_factory1 = GUID(0x770AAE78, 0xF26F, 0x4DBA, (0xA8, 0x29, 0x25, 0x3C, 0x83, 0xD1, 0xB3, 0x87))
-        iid_tex2d = GUID(0x6F15AAF2, 0xD208, 0x4E89, (0x9A, 0xB4, 0x48, 0x95, 0x35, 0xD3, 0x4F, 0x9C))
-
-        factory = ctypes.c_void_p()
-        if dxgi.CreateDXGIFactory1(ctypes.byref(iid_factory1), ctypes.byref(factory)) != 0 or not factory.value:
-            return
-
-        fvt = ctypes.cast(ctypes.cast(factory, ctypes.POINTER(ctypes.c_void_p))[0], ctypes.POINTER(ctypes.c_void_p))
-        enum_adapters = ctypes.WINFUNCTYPE(
-            ctypes.c_long, ctypes.c_void_p, wintypes.UINT, ctypes.POINTER(ctypes.c_void_p)
-        )(fvt[12])
-
-        best_adapter = ctypes.c_void_p()
-        best_vram = -1
-        idx = 0
-        while True:
-            ad = ctypes.c_void_p()
-            if enum_adapters(factory, idx, ctypes.byref(ad)) != 0 or not ad.value:
-                break
-            avt = ctypes.cast(ctypes.cast(ad, ctypes.POINTER(ctypes.c_void_p))[0], ctypes.POINTER(ctypes.c_void_p))
-            get_desc1 = ctypes.WINFUNCTYPE(
-                ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(DXGI_ADAPTER_DESC1)
-            )(avt[10])
-            desc = DXGI_ADAPTER_DESC1()
-            if get_desc1(ad, ctypes.byref(desc)) == 0:
-                # Skip software renderer (DXGI_ADAPTER_FLAG_SOFTWARE = 2) and pick largest DedicatedVideoMemory
-                if (desc.Flags & 2) == 0 and int(desc.DedicatedVideoMemory) > best_vram:
-                    if best_adapter.value:
-                        self._com_release(best_adapter)
-                    best_vram = int(desc.DedicatedVideoMemory)
-                    best_adapter = ad
-                else:
-                    self._com_release(ad)
-            else:
-                self._com_release(ad)
-            idx += 1
-
-        self._com_release(factory)
-
-        scd = DXGI_SWAP_CHAIN_DESC()
-        scd.BufferDesc.Width = self.width
-        scd.BufferDesc.Height = self.height
-        scd.BufferDesc.RefreshRate = DXGI_RATIONAL(60, 1)
-        scd.BufferDesc.Format = 87  # DXGI_FORMAT_B8G8R8A8_UNORM (matches QImage Format_ARGB32 on little-endian)
-        scd.SampleDesc.Count = 1
-        scd.SampleDesc.Quality = 0
-        scd.BufferUsage = 0x20  # DXGI_USAGE_RENDER_TARGET_OUTPUT
-        scd.BufferCount = 1
-        scd.OutputWindow = self.hwnd
-        scd.Windowed = True
-        scd.SwapEffect = 0  # DXGI_SWAP_EFFECT_DISCARD
-
-        feature_level = wintypes.UINT()
-        driver_type = 0 if best_adapter.value else 1  # UNKNOWN when adapter specified, else HARDWARE
-        hr = d3d11.D3D11CreateDeviceAndSwapChain(
-            best_adapter if best_adapter.value else None,
-            driver_type,
-            None,
-            0,
-            None,
-            0,
-            7,  # D3D11_SDK_VERSION
-            ctypes.byref(scd),
-            ctypes.byref(self.swapchain),
-            ctypes.byref(self.device),
-            ctypes.byref(feature_level),
-            ctypes.byref(self.context),
-        )
-        if best_adapter.value:
-            self._com_release(best_adapter)
-
-        if hr != 0 or not self.swapchain.value or not self.context.value:
-            self.release()
-            return
-
-        sc_vt = ctypes.cast(
-            ctypes.cast(self.swapchain, ctypes.POINTER(ctypes.c_void_p))[0], ctypes.POINTER(ctypes.c_void_p)
-        )
-        get_buffer = ctypes.WINFUNCTYPE(
-            ctypes.c_long, ctypes.c_void_p, wintypes.UINT, ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p)
-        )(sc_vt[9])
-        self._present_fn = ctypes.WINFUNCTYPE(
-            ctypes.c_long, ctypes.c_void_p, wintypes.UINT, wintypes.UINT
-        )(sc_vt[8])
-
-        if get_buffer(self.swapchain, 0, ctypes.byref(iid_tex2d), ctypes.byref(self.backbuf)) != 0:
-            self.release()
-            return
-
-        ctx_vt = ctypes.cast(
-            ctypes.cast(self.context, ctypes.POINTER(ctypes.c_void_p))[0], ctypes.POINTER(ctypes.c_void_p)
-        )
-        self._update_subresource_fn = ctypes.WINFUNCTYPE(
-            None,
-            ctypes.c_void_p,
-            ctypes.c_void_p,
-            wintypes.UINT,
-            ctypes.c_void_p,
-            ctypes.c_void_p,
-            wintypes.UINT,
-            wintypes.UINT,
-        )(ctx_vt[48])
-
-    @staticmethod
-    def _com_release(ptr: ctypes.c_void_p) -> None:
-        if ptr and ptr.value:
-            vt = ctypes.cast(ctypes.cast(ptr, ctypes.POINTER(ctypes.c_void_p))[0], ctypes.POINTER(ctypes.c_void_p))
-            release_fn = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(vt[2])
-            release_fn(ptr)
-            ptr.value = None
-
-    @property
-    def is_valid(self) -> bool:
-        return bool(self.swapchain.value and self.backbuf.value and self._present_fn and self._update_subresource_fn)
-
-    def present_qimage(self, img: QImage) -> None:
-        if not self.is_valid:
-            return
-        raw = img.constBits().tobytes()
-        buf = (ctypes.c_char * len(raw)).from_buffer_copy(raw)
-        self._update_subresource_fn(
-            self.context,
-            self.backbuf,
-            0,
-            None,
-            ctypes.byref(buf),
-            img.bytesPerLine(),
-            0,
-        )
-        self._present_fn(self.swapchain, 0, 0)
-
-    def release(self) -> None:
-        self._com_release(self.backbuf)
-        self._com_release(self.context)
-        self._com_release(self.device)
-        self._com_release(self.swapchain)
-        self._present_fn = None
-        self._update_subresource_fn = None
-
-
-class GameCaptureTargetWindow(QWindow):
-    """Top-level native D3D11 window bound to the discrete GPU so OBS Game Capture hooks without multi-adapter mode."""
-
-    def __init__(self, canvas: SyncCanvas, on_toggle_play: Callable[[], None]):
-        super().__init__()
-        self._canvas = canvas
-        self._on_toggle_play = on_toggle_play
-        self.setTitle(t("verifier_game_capture_title"))
-        self.resize(800, 360)
-        self.setMinimumSize(QSize(480, 220))
-        self._d3d: Optional[_D3D11Presenter] = None
-        self._timer = QTimer(self)
-        self._timer.setInterval(16)
-        self._timer.timeout.connect(self._render_frame)
-        self._timer.start()
-
-    def stop_timer(self) -> None:
-        if self._timer.isActive():
-            self._timer.stop()
-        if self._d3d is not None:
-            self._d3d.release()
-            self._d3d = None
-
-    def _pixel_size(self) -> tuple[int, int]:
-        dpr = max(1.0, float(self.devicePixelRatio()))
-        return max(64, int(round(self.width() * dpr))), max(64, int(round(self.height() * dpr)))
-
-    def _ensure_d3d(self) -> Optional[_D3D11Presenter]:
-        if sys.platform != "win32" or os.environ.get("QT_QPA_PLATFORM") == "offscreen":
-            return None
-        pw, ph = self._pixel_size()
-        if self._d3d is not None and (self._d3d.width != pw or self._d3d.height != ph or not self._d3d.is_valid):
-            self._d3d.release()
-            self._d3d = None
-        if self._d3d is None:
-            try:
-                self._d3d = _D3D11Presenter(int(self.winId()), pw, ph)
-            except Exception:
-                self._d3d = None
-        return self._d3d if (self._d3d and self._d3d.is_valid) else None
-
-    def _render_frame(self) -> None:
-        if not self.isVisible():
-            return
-        d3d = self._ensure_d3d()
-        if d3d is None:
-            return
-        img = QImage(d3d.width, d3d.height, QImage.Format.Format_ARGB32)
-        self._canvas.render_scene(img, d3d.width, d3d.height)
-        d3d.present_qimage(img)
-
-    def exposeEvent(self, event: QExposeEvent) -> None:
-        super().exposeEvent(event)
-        if self.isExposed():
-            self._render_frame()
-
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        super().resizeEvent(event)
-        if self._d3d is not None:
-            self._d3d.release()
-            self._d3d = None
-
-    def keyPressEvent(self, event: QKeyEvent) -> None:
-        if event.key() == Qt.Key.Key_Space:
-            self._on_toggle_play()
-            event.accept()
-        elif event.key() == Qt.Key.Key_Escape:
-            self.close()
-            event.accept()
-        else:
-            super().keyPressEvent(event)
-
-
 class SyncVerifierWindow(QDialog):
     """Independent verification window for real-time auditory & visual sync testing."""
 
@@ -527,113 +241,7 @@ class SyncVerifierWindow(QDialog):
         self.retranslate_ui()
 
     def _apply_dark_theme(self) -> None:
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #121218;
-                color: #e0e0e0;
-                font-family: 'Segoe UI', 'Meiryo', sans-serif;
-            }
-            QFrame#obs_hint_banner {
-                background-color: #151e34;
-                border: 1px solid #1e3a6a;
-                border-radius: 6px;
-                padding: 6px 10px;
-            }
-            QFrame#ctrl_panel {
-                background-color: #181824;
-                border: 1px solid #2a2a38;
-                border-radius: 8px;
-                padding: 10px;
-            }
-            QFrame#obs_hint_banner QLabel,
-            QFrame#ctrl_panel QLabel, QFrame#ctrl_panel QRadioButton {
-                background: transparent;
-                border: none;
-                padding: 0px;
-            }
-            QFrame#obs_trim_frame {
-                background: transparent;
-                border: none;
-                border-top: 1px solid #28283a;
-                padding-top: 6px;
-            }
-            QPushButton#trim_btn {
-                padding: 5px 6px;
-            }
-            QPushButton {
-                background-color: #232334;
-                border: 1px solid #3d3d52;
-                border-radius: 5px;
-                padding: 6px 12px;
-                color: #ffffff;
-                font-weight: 500;
-            }
-            QPushButton:hover {
-                background-color: #313148;
-                border-color: #5c5c7a;
-            }
-            QPushButton#play_btn {
-                background-color: #00897b;
-                border: 1px solid #26a69a;
-                font-weight: bold;
-                font-size: 13px;
-                padding: 8px 20px;
-                border-radius: 6px;
-            }
-            QPushButton#play_btn:hover {
-                background-color: #009688;
-            }
-            QPushButton#stop_btn {
-                background-color: #c62828;
-                border: 1px solid #e53935;
-                font-weight: bold;
-                font-size: 13px;
-                padding: 8px 20px;
-                border-radius: 6px;
-            }
-            QPushButton#stop_btn:hover {
-                background-color: #d32f2f;
-            }
-            QRadioButton {
-                color: #ccccdd;
-                font-size: 12px;
-                font-weight: bold;
-                spacing: 6px;
-            }
-            QRadioButton::indicator {
-                width: 14px;
-                height: 14px;
-                border-radius: 7px;
-                border: 2px solid #666680;
-                background-color: #181824;
-            }
-            QRadioButton::indicator:checked {
-                border: 2px solid #00e5ff;
-                background-color: #00e5ff;
-            }
-            QMessageBox QPushButton {
-                min-width: 72px;
-                padding: 6px 14px;
-            }
-            QSlider::groove:horizontal {
-                border: 1px solid #2a2a38;
-                height: 6px;
-                background: #1a1a24;
-                border-radius: 3px;
-            }
-            QSlider::sub-page:horizontal {
-                background: #82aaff;
-                border-radius: 3px;
-            }
-            QSlider::handle:horizontal {
-                background: #ffffff;
-                border: 1px solid #82aaff;
-                width: 14px;
-                margin-top: -4px;
-                margin-bottom: -4px;
-                border-radius: 7px;
-            }
-        """)
+        self.setStyleSheet(VERIFIER_DIALOG_QSS)
 
     def _init_ui(self) -> None:
         main_layout = QVBoxLayout(self)
@@ -807,33 +415,20 @@ class SyncVerifierWindow(QDialog):
         self.label_obs_trim_title.setText(
             t("verifier_obs_video_trim") if self.current_obs_video_source else t("verifier_obs_trim")
         )
-        if not self.obs_client.is_connected:
-            self.label_obs_info.setText(t("verifier_obs_not_connected"))
-            self.obs_trim_frame.setEnabled(False)
-            return
-
-        # Prefer video source (render delay) when available so audio-to-mic sync is preserved
-        if self.current_obs_video_source:
-            self.obs_trim_frame.setEnabled(True)
-            try:
-                cur_delay = self.obs_client.get_render_delay(self.current_obs_video_source)
-                self.label_obs_info.setText(
-                    f"{t('verifier_target_source', name=self.current_obs_video_source)} | {t('verifier_obs_current', offset=cur_delay)}"
-                )
-            except Exception:
-                self.label_obs_info.setText(t("verifier_obs_not_connected"))
-            return
-
-        if not self.current_obs_source:
+        target_name = self.current_obs_video_source or self.current_obs_source
+        if not self.obs_client.is_connected or not target_name:
             self.label_obs_info.setText(t("verifier_obs_not_connected"))
             self.obs_trim_frame.setEnabled(False)
             return
 
         self.obs_trim_frame.setEnabled(True)
         try:
-            cur_offset = self.obs_client.get_sync_offset(self.current_obs_source)
+            if self.current_obs_video_source:
+                cur_val = self.obs_client.get_render_delay(self.current_obs_video_source)
+            else:
+                cur_val = self.obs_client.get_sync_offset(target_name)
             self.label_obs_info.setText(
-                f"{t('verifier_target_source', name=self.current_obs_source)} | {t('verifier_obs_current', offset=cur_offset)}"
+                f"{t('verifier_target_source', name=target_name)} | {t('verifier_obs_current', offset=cur_val)}"
             )
         except Exception:
             self.label_obs_info.setText(t("verifier_obs_not_connected"))
@@ -943,7 +538,7 @@ class SyncVerifierWindow(QDialog):
                 cur_vid = None
             if cur_vid is not None:
                 raw_target = cur_vid - delta
-                new_vid = max(0, min(500, raw_target))
+                new_vid = max(0, min(MAX_RENDER_DELAY_MS, raw_target))
                 msg = (
                     f"{summary}\n\n"
                     f"{t('verifier_analyze_apply_video_q', name=self.current_obs_video_source, cur=cur_vid, new=new_vid)}"
@@ -1001,7 +596,7 @@ class SyncVerifierWindow(QDialog):
         if self.current_obs_video_source:
             try:
                 cur = self.obs_client.get_render_delay(self.current_obs_video_source)
-                new_val = max(0, min(500, int(round(cur + delta_ms))))
+                new_val = max(0, min(MAX_RENDER_DELAY_MS, int(round(cur + delta_ms))))
                 actual = self.obs_client.set_render_delay(self.current_obs_video_source, new_val)
                 self._refresh_obs_info()
                 if self.on_video_delay_changed_cb is not None:

@@ -175,6 +175,167 @@ DARK_THEME_QSS = """
 # Rounded background used by the result / adjustment / apply panels
 PANEL_FRAME_QSS = "background-color: #1a1a26; border-radius: 6px; padding: 4px;"
 
+APPLY_MEASURED_BTN_QSS = """
+    QPushButton {
+        background-color: #1565c0;
+        color: #ffffff;
+        font-weight: bold;
+        padding: 5px 8px;
+        border-radius: 4px;
+    }
+    QPushButton:hover {
+        background-color: #1976d2;
+    }
+    QPushButton:disabled {
+        background-color: #262635;
+        color: #555566;
+        border: 1px solid #333344;
+    }
+"""
+
+APPLY_OBS_BTN_QSS = """
+    QPushButton {
+        background-color: #28283c;
+        color: #bbbbdd;
+        padding: 4px 6px;
+        font-size: 11px;
+        border: 1px solid #3d3d56;
+        border-radius: 4px;
+    }
+    QPushButton:hover {
+        background-color: #383854;
+        color: #ffffff;
+    }
+    QPushButton:disabled {
+        background-color: #1f1f2a;
+        color: #555566;
+        border: 1px solid #2a2a38;
+    }
+"""
+
+TRIM_DELTA_BTN_QSS = """
+    QPushButton {
+        padding: 4px 0px;
+        font-size: 11px;
+        font-weight: 500;
+        background-color: #232334;
+        border: 1px solid #3d3d52;
+        border-radius: 4px;
+    }
+    QPushButton:hover {
+        background-color: #313148;
+        border-color: #5c5c7a;
+    }
+"""
+
+VERIFIER_DIALOG_QSS = """
+    QDialog {
+        background-color: #121218;
+        color: #e0e0e0;
+        font-family: 'Segoe UI', 'Meiryo', sans-serif;
+    }
+    QFrame#obs_hint_banner {
+        background-color: #151e34;
+        border: 1px solid #1e3a6a;
+        border-radius: 6px;
+        padding: 6px 10px;
+    }
+    QFrame#ctrl_panel {
+        background-color: #181824;
+        border: 1px solid #2a2a38;
+        border-radius: 8px;
+        padding: 10px;
+    }
+    QFrame#obs_hint_banner QLabel,
+    QFrame#ctrl_panel QLabel, QFrame#ctrl_panel QRadioButton {
+        background: transparent;
+        border: none;
+        padding: 0px;
+    }
+    QFrame#obs_trim_frame {
+        background: transparent;
+        border: none;
+        border-top: 1px solid #28283a;
+        padding-top: 6px;
+    }
+    QPushButton#trim_btn {
+        padding: 5px 6px;
+    }
+    QPushButton {
+        background-color: #232334;
+        border: 1px solid #3d3d52;
+        border-radius: 5px;
+        padding: 6px 12px;
+        color: #ffffff;
+        font-weight: 500;
+    }
+    QPushButton:hover {
+        background-color: #313148;
+        border-color: #5c5c7a;
+    }
+    QPushButton#play_btn {
+        background-color: #00897b;
+        border: 1px solid #26a69a;
+        font-weight: bold;
+        font-size: 13px;
+        padding: 8px 20px;
+        border-radius: 6px;
+    }
+    QPushButton#play_btn:hover {
+        background-color: #009688;
+    }
+    QPushButton#stop_btn {
+        background-color: #c62828;
+        border: 1px solid #e53935;
+        font-weight: bold;
+        font-size: 13px;
+        padding: 8px 20px;
+        border-radius: 6px;
+    }
+    QPushButton#stop_btn:hover {
+        background-color: #d32f2f;
+    }
+    QRadioButton {
+        color: #ccccdd;
+        font-size: 12px;
+        font-weight: bold;
+        spacing: 6px;
+    }
+    QRadioButton::indicator {
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        border: 2px solid #666680;
+        background-color: #181824;
+    }
+    QRadioButton::indicator:checked {
+        border: 2px solid #00e5ff;
+        background-color: #00e5ff;
+    }
+    QMessageBox QPushButton {
+        min-width: 72px;
+        padding: 6px 14px;
+    }
+    QSlider::groove:horizontal {
+        border: 1px solid #2a2a38;
+        height: 6px;
+        background: #1a1a24;
+        border-radius: 3px;
+    }
+    QSlider::sub-page:horizontal {
+        background: #82aaff;
+        border-radius: 3px;
+    }
+    QSlider::handle:horizontal {
+        background: #ffffff;
+        border: 1px solid #82aaff;
+        width: 14px;
+        margin-top: -4px;
+        margin-bottom: -4px;
+        border-radius: 7px;
+    }
+"""
+
 
 def level_bar_style(color: str) -> str:
     """Stylesheet for the live input level meter with the given chunk color."""
