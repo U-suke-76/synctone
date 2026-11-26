@@ -102,7 +102,7 @@ def decode_recording(path: str, max_seconds: Optional[float] = None) -> DecodedR
     )
 
 
-def analyze_decoded_recording(rec: DecodedRecording) -> AvOffsetResult:
+def analyze_decoded_recording(rec: DecodedRecording, wrap_phase: float = 0.0) -> AvOffsetResult:
     """Run the AV sync analysis on a decoded recording.
 
     Raises:
@@ -110,9 +110,13 @@ def analyze_decoded_recording(rec: DecodedRecording) -> AvOffsetResult:
     """
     beeps = detect_beep_onsets(rec.audio, rec.audio_sample_rate) + rec.audio_start_s
     bar_x = bar_positions_from_profiles(rec.profiles)
-    return estimate_av_offset(beeps, rec.frame_times, bar_x)
+    return estimate_av_offset(beeps, rec.frame_times, bar_x, wrap_phase=wrap_phase)
 
 
-def analyze_recording(path: str, max_seconds: Optional[float] = None) -> AvOffsetResult:
+def analyze_recording(
+    path: str,
+    max_seconds: Optional[float] = None,
+    wrap_phase: float = 0.0,
+) -> AvOffsetResult:
     """Decode a recording file and estimate its audio/video offset (positive: video later than audio)."""
-    return analyze_decoded_recording(decode_recording(path, max_seconds=max_seconds))
+    return analyze_decoded_recording(decode_recording(path, max_seconds=max_seconds), wrap_phase=wrap_phase)

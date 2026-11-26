@@ -325,7 +325,7 @@ def test_multilingual_switching(qapp):
     assert win.btn_apply_obs.text() == "📥 OBS Value (--)"
     assert win.plot_widget.align_checkbox.text() == "Alignment Preview (Shifted)"
     assert win.plot_widget.btn_zoom_view.text() == "🔍 Zoom View (Peak Alignment)"
-    assert win.combo_measure_mode.itemText(0).startswith("3 Measurements")
+    assert win.combo_measure_mode.itemText(0).startswith("3 Runs")
 
     # Switch to Korean (index 2)
     win.combo_language.setCurrentIndex(2)

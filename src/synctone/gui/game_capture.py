@@ -306,7 +306,20 @@ class GameCaptureTargetWindow(QWindow):
         self._timer.timeout.connect(self._render_frame)
         self._timer.start()
 
+    def pause_timer(self) -> None:
+        """Pause rendering while keeping the HWND and D3D11 SwapChain alive for instant OBS re-capture."""
+        if self._timer.isActive():
+            self._timer.stop()
+
+    def resume_timer(self) -> None:
+        """Resume 60fps rendering on the existing HWND / D3D11 SwapChain."""
+        if not self._timer.isActive():
+            self._timer.start()
+        if self.isVisible():
+            self._render_frame()
+
     def stop_timer(self) -> None:
+        """Fully stop rendering and release all D3D11 resources (called when parent verifier closes)."""
         if self._timer.isActive():
             self._timer.stop()
         if self._d3d is not None:
@@ -377,7 +390,8 @@ class GameCaptureTargetWindow(QWindow):
             self._on_toggle_play()
             event.accept()
         elif event.key() == Qt.Key.Key_Escape:
-            self.close()
+            self.pause_timer()
+            self.hide()
             event.accept()
         else:
             super().keyPressEvent(event)

@@ -476,13 +476,15 @@ class MainWindow(QMainWindow):
         status_row.addStretch()
         apply_layout.addLayout(status_row)
 
-        # Video source synchronization (Render Delay)
+        # Video source synchronization was moved to the AV Sync Verifier window.
+        # Keep hidden attributes only for backward compatibility with internal helpers.
         self.check_sync_video = QCheckBox()
-        self.check_sync_video.setStyleSheet("font-size: 11px; color: #aaccff; margin-top: 2px; margin-bottom: 1px;")
+        self.check_sync_video.setVisible(False)
+        self.check_sync_video.setChecked(False)
         self.check_sync_video.toggled.connect(self._on_video_check_toggled)
-        apply_layout.addWidget(self.check_sync_video)
 
         self.video_container = QWidget()
+        self.video_container.setVisible(False)
         video_layout = QVBoxLayout(self.video_container)
         video_layout.setContentsMargins(0, 0, 0, 2)
         video_layout.setSpacing(4)
@@ -501,9 +503,6 @@ class MainWindow(QMainWindow):
         video_status_row.addWidget(self.current_video_delay_label)
         video_status_row.addStretch()
         video_layout.addLayout(video_status_row)
-
-        self.video_container.setVisible(False)
-        apply_layout.addWidget(self.video_container)
 
         apply_layout.addStretch()
 
@@ -676,9 +675,9 @@ class MainWindow(QMainWindow):
             total = int(self.combo_measure_mode.currentData() or 3)
             self.progress_bar.setRange(0, total)
 
-        sync_video = self.settings.value("obs/sync_video", False, type=bool)
-        self.check_sync_video.setChecked(sync_video)
-        self.video_container.setVisible(sync_video)
+        # Keep video sync unchecked on MainWindow (managed inside SyncVerifierWindow)
+        self.check_sync_video.setChecked(False)
+        self.video_container.setVisible(False)
 
     def _save_settings(self) -> None:
         """Save settings to QSettings."""
@@ -1333,8 +1332,8 @@ class MainWindow(QMainWindow):
         return src.name if src is not None else None
 
     def _get_selected_obs_video_source_name(self) -> Optional[str]:
-        """Helper to get currently selected OBS video source name if connected."""
-        if not self.obs_client.is_connected:
+        """Helper to get currently selected OBS video source name if connected and video sync is enabled."""
+        if not self.obs_client.is_connected or not self.check_sync_video.isChecked():
             return None
         v_src = self._selected_obs_video_source()
         return v_src.name if v_src is not None else None
@@ -1474,10 +1473,24 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    from PySide6.QtCore import QDir, QLockFile
+
     app = QApplication(sys.argv)
+    lock_file = QLockFile(os.path.join(QDir.tempPath(), "SyncTone.lock"))
+    lock_file.setStaleLockTime(0)
+    if not lock_file.tryLock(100):
+        QMessageBox.information(
+            None,
+            "SyncTone",
+            "SyncTone はすでに起動しています。\n(SyncTone is already running.)",
+        )
+        sys.exit(0)
+
     window = MainWindow()
     window.show()
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    lock_file.unlock()
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

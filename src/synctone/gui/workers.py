@@ -102,14 +102,17 @@ class RecordingAnalysisWorker(QThread):
     finished_analysis = Signal(object)  # AvOffsetResult
     error_occurred = Signal(str)
 
-    def __init__(self, path: str, max_seconds: Optional[float] = 120.0):
+    def __init__(self, path: str, max_seconds: Optional[float] = 120.0, wrap_phase: float = 0.5):
         super().__init__()
         self.path = path
         self.max_seconds = max_seconds
+        self.wrap_phase = wrap_phase
 
     def run(self):
         try:
             from synctone.core.recording import analyze_recording  # lazy: pulls in PyAV
-            self.finished_analysis.emit(analyze_recording(self.path, max_seconds=self.max_seconds))
+            self.finished_analysis.emit(
+                analyze_recording(self.path, max_seconds=self.max_seconds, wrap_phase=self.wrap_phase)
+            )
         except Exception as e:
             self.error_occurred.emit(str(e))

@@ -85,15 +85,11 @@ def test_sync_canvas_render(qapp):
     # Idle render
     canvas.repaint()
 
-    # Active render in beep mode (forces paintEvent with drawPolygon)
+    # Active render (forces paintEvent with drawPolygon)
     from PySide6.QtGui import QPaintEvent
     from PySide6.QtCore import QRect
     player.start()
     event = QPaintEvent(QRect(0, 0, 600, 300))
-    canvas.paintEvent(event)
-
-    # Active render in analysis mode
-    canvas.analysis_mode = True
     canvas.paintEvent(event)
 
     player.stop()
@@ -139,13 +135,6 @@ def test_sync_verifier_window_interactions(qapp):
     window.keyPressEvent(space_event)
     assert not window.player.is_running
 
-    # Mode switch
-    window.radio_analysis.setChecked(True)
-    assert window.canvas.analysis_mode
-
-    window.radio_flash.setChecked(True)
-    assert not window.canvas.analysis_mode
-
     # Tempo spinbox change
     window.spin_bpm.setValue(100)
     assert window.player.bpm == 100.0
@@ -154,7 +143,7 @@ def test_sync_verifier_window_interactions(qapp):
     window.slider_volume.setValue(70)
     assert abs(window.player.amplitude - 0.7) < 1e-4
 
-    # OBS trim buttons (+1ms, -5ms, etc.)
+    # OBS trim buttons (+1ms, -5ms, +20ms, etc.)
     window._adjust_obs_offset(1.0)
     mock_obs.set_sync_offset.assert_called_with("BGM Source", 141)
     assert offset_changed_records[-1] == 141.0
@@ -162,6 +151,12 @@ def test_sync_verifier_window_interactions(qapp):
     window._adjust_obs_offset(-5.0)
     mock_obs.set_sync_offset.assert_called_with("BGM Source", 135)
     assert offset_changed_records[-1] == 135.0
+
+    # Direct numeric input via OBS delay spinbox
+    window.spin_obs_delay.setValue(180)
+    window._on_obs_delay_spin_finished()
+    mock_obs.set_sync_offset.assert_called_with("BGM Source", 180)
+    assert offset_changed_records[-1] == 180.0
 
     # Multilingual retranslate test
     from synctone.i18n import I18nManager
@@ -260,33 +255,24 @@ def test_callback_records_clock_history():
     assert cycles[-1] == pytest.approx(5 * 512 / player._cycle_samples)
 
 
-def test_analysis_mode_draws_bar_at_clock_phase(qapp):
-    """Analysis mode: black canvas with one white bar at margin + phase * track width."""
-    from synctone.gui.verifier_window import SyncVerifierWindow, SyncCanvas
+def test_unified_canvas_draws_bar_and_game_capture_window(qapp):
+    """Unified canvas draws a high-contrast sweeping bar at center + phase * (w - 60) and supports GameCapture."""
+    from synctone.gui.verifier_window import SyncVerifierWindow
     from synctone.obs.client import ObsClient
 
     win = SyncVerifierWindow(obs_client=ObsClient(), dummy_mode=True)
     try:
         win.show()
-        win.radio_analysis.setChecked(True)
-        assert win.canvas.analysis_mode
-        assert win.spin_bpm.value() == SyncVerifierWindow.ANALYSIS_BPM
-        assert not win.spin_bpm.isEnabled()
-
         win.player._is_running = True
-        win.player.get_clock_phase = lambda: 0.5
+        win.player.get_phase = lambda: 0.25
         img = win.canvas.grab().toImage()
-        y = img.height() // 2
+        y = int(img.height() * 0.55)
         xs = np.arange(img.width(), dtype=np.float64)
-        lum = np.array([img.pixelColor(int(x), y).red() for x in xs], dtype=np.float64)
-        centroid = float((xs * lum).sum() / lum.sum())
-        margin = SyncCanvas.ANALYSIS_MARGIN
-        expected = margin + 0.5 * (img.width() - 2 * margin)
-        assert abs(centroid - expected) < 1.0
-
-        win.radio_flash.setChecked(True)
-        assert not win.canvas.analysis_mode
-        assert win.spin_bpm.isEnabled()
+        # Bright pink/white bar stands out strongly in the red channel
+        red = np.array([img.pixelColor(int(x), y).red() for x in xs], dtype=np.float64)
+        peak_x = float(xs[red == red.max()].mean())
+        expected = img.width() / 2.0 + 0.25 * (img.width() - 60)
+        assert abs(peak_x - expected) < 2.0
 
         # Verify opening GameCaptureTargetWindow works without error
         win.btn_game_capture.click()

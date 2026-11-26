@@ -233,20 +233,29 @@ def estimate_av_offset(
     beep_times: np.ndarray,
     frame_times: np.ndarray,
     bar_x: np.ndarray,
+    wrap_phase: float = 0.0,
 ) -> AvOffsetResult:
     """Estimate the audio/video offset of a recording from beep onsets and per-frame bar positions.
 
     The result is unambiguous within +-(period / 2). Use a beep period that is not a multiple of the frame
     interval so that the frames sample the cycle densely (see :func:`fit_video_clock`).
+
+    Args:
+        beep_times: Detected beep onset times in seconds.
+        frame_times: Presentation timestamp of each video frame in seconds.
+        bar_x: Detected bar x position per frame in pixels (NaN where not found).
+        wrap_phase: App-clock phase (0..1) at which the sweeping bar wraps from right edge to left edge.
+            Use 0.0 if the bar wraps at the beep (left edge = beep), or 0.5 if the bar hits the center
+            at the beep and wraps at the half-cycle (visual timeline mode).
     """
     period, c, audio_rms = fit_audio_clock(beep_times)
-    # Only scan frames during which the timecode sweep was in steady state.
-    # Trim one cycle after the first beep (so video render delay up to ~500 ms has already started
-    # moving the bar) and before the last beep (in case playback was stopped right after it).
+    # Only scan frames during which the timecode sweep and OBS audio capture are in steady state.
+    # For longer recordings (>= 6 beeps), skip the first 2 cycles to avoid OBS capture startup drift.
     t_arr = np.asarray(frame_times, dtype=np.float64).ravel()
     x_arr = np.asarray(bar_x, dtype=np.float64).ravel()
     beeps_sorted = np.sort(np.asarray(beep_times, dtype=np.float64).ravel())
-    inner_window = (t_arr >= beeps_sorted[0] + period * 0.5) & (t_arr <= beeps_sorted[-1] - period * 0.2)
+    lead_cycles = 2.0 if beeps_sorted.size >= 6 else 0.5
+    inner_window = (t_arr >= beeps_sorted[0] + period * lead_cycles) & (t_arr <= beeps_sorted[-1] - period * 0.2)
     if np.count_nonzero(inner_window & np.isfinite(x_arr)) >= 20:
         t_arr = t_arr[inner_window]
         x_arr = x_arr[inner_window]
@@ -256,13 +265,14 @@ def estimate_av_offset(
             t_arr = t_arr[in_window]
             x_arr = x_arr[in_window]
 
-    v, video_unc, video_rms, n_used = fit_video_clock(t_arr, x_arr, period)
+    v_wrap, video_unc, video_rms, n_used = fit_video_clock(t_arr, x_arr, period)
+    v = v_wrap - wrap_phase * period
     offset = ((v - c + period / 2.0) % period) - period / 2.0
     total_unc_ms = (video_unc + audio_rms) * 1000.0
     if total_unc_ms > 80.0 or not np.isfinite(video_rms):
         raise ValueError(
             f"Timecode bar sweep could not be reliably tracked (uncertainty ±{total_unc_ms:.1f} ms). "
-            "Make sure the SyncTone window is captured in 'Recording analysis' mode and playing while recording."
+            "Make sure the SyncTone window is captured in OBS and playing while recording."
         )
     return AvOffsetResult(
         offset_ms=offset * 1000.0,

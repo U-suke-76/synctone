@@ -295,6 +295,51 @@ VERIFIER_DIALOG_QSS = """
     QPushButton#stop_btn:hover {
         background-color: #d32f2f;
     }
+    QPushButton#auto_measure_btn {
+        background-color: #1565c0;
+        border: 1px solid #42a5f5;
+        font-weight: bold;
+        font-size: 12px;
+        padding: 7px 14px;
+        border-radius: 6px;
+    }
+    QPushButton#auto_measure_btn:hover {
+        background-color: #1976d2;
+    }
+    QPushButton#auto_measure_btn:disabled {
+        background-color: #242434;
+        border: 1px solid #323246;
+        color: #66667a;
+    }
+    QPushButton#apply_result_btn {
+        background-color: #2e7d32;
+        border: 1px solid #66bb6a;
+        font-weight: bold;
+        padding: 6px 14px;
+        border-radius: 5px;
+    }
+    QPushButton#apply_result_btn:hover {
+        background-color: #388e3c;
+    }
+    QPushButton#apply_result_btn:disabled {
+        background-color: #242434;
+        border: 1px solid #323246;
+        color: #66667a;
+    }
+    QFrame#result_frame {
+        background-color: #14141f;
+        border: 1px solid #2b2b40;
+        border-radius: 6px;
+        padding: 6px 10px;
+    }
+    QSpinBox#obs_delay_spin {
+        background-color: #14141f;
+        border: 1px solid #3d3d52;
+        border-radius: 4px;
+        padding: 3px 6px;
+        color: #ffffff;
+        font-weight: bold;
+    }
     QRadioButton {
         color: #ccccdd;
         font-size: 12px;
